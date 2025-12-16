@@ -84,7 +84,7 @@ class DockerSandbox:
 
             except subprocess.TimeoutExpired:
 
-                with stderr_path.open('w') as stderr:
+                with stderr_path.open('a') as stderr:
                     stderr.write(f'Execution timed out after {timeout_sec} seconds')
                 
                 exit_code = 124

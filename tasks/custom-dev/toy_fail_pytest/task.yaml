@@ -1,0 +1,20 @@
+id: toy_fail_pytest
+suite: custom-dev
+
+repo:
+  url: ../../../examples/toy_repo
+  commit: a3219a9adc9f143c379d38d76a77cd969380f90d
+
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 300
+
+setup:
+  commands:
+    - pip install --upgrade pip
+    - pip install pytest
+    - pip install -e .
+
+run:
+  command: pytest -q

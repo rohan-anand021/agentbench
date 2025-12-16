@@ -10,14 +10,15 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "httpx",
-    "PyYAML",
+    "pyyaml",
     "ulid-py",
     "path>=17.1.1",
     "pytest>=9.0.2",
+    "ulid>=1.1",
 ]
 
 [project.scripts]
-ab = "agentbench.cli:app"
+agentbench = "agentbench.cli:app"
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
