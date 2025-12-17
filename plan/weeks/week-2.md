@@ -10,13 +10,14 @@ By end of week: Load and enumerate all tasks in a suite, run baseline validation
 | Day | Focus | Status |
 |-----|-------|--------|
 | Day 1 | Task Loader Module | ✅ COMPLETE |
-| Day 2 | Baseline Validator | ⏳ Not started |
+| Day 2 | Baseline Validator | ✅ COMPLETE |
 | Day 3 | JSONL Attempt Records | ⏳ Not started |
 | Day 4 | Suite Runner + CLI | ⏳ Not started |
 | Day 5 | Polish + Additional Tasks | ⏳ Not started |
 
 ### Notes
 - **Day 1**: Created `models.py` (for TaskSpec and nested models) and `validation.py` (extracted from run_task.py) in addition to the planned files.
+- **Day 2**: Created `validator.py` with comprehensive exit code handling. Added `ValidationResult` to `models.py`. Created `test_validator.py` with 8 tests (2 integration, 6 unit). Refactored `run_task.py` to use loader and git utilities.
 - Minor linting issues remain (import ordering, line lengths) - can be auto-fixed with `ruff check --fix`
 
 ---
@@ -110,7 +111,7 @@ Baseline validation ensures that a task's tests **fail** before any agent interv
 3. It establishes the "before" state for comparison
 
 ### Create Validator Module
-- [ ] Create `agentbench/tasks/validator.py`:
+- [x] Create `agentbench/tasks/validator.py`:
   - Define `ValidationResult` dataclass:
     - `task_id: str`
     - `valid: bool` (True if baseline fails as expected)
@@ -133,13 +134,13 @@ Baseline validation ensures that a task's tests **fail** before any agent interv
     - Return `ValidationResult`
 
 ### Integrate with Existing Code
-- [ ] Refactor `run_task.py` to use `TaskSpec` from loader:
+- [x] Refactor `run_task.py` to use `TaskSpec` from loader:
   - Change `run_task(task_yaml: Path, ...)` to internally use `load_task()`
   - Keep the function signature the same for CLI compatibility
   - Extract common logic (git clone, checkout) into helper functions in `agentbench/util/git.py`
 
 ### Create Git Utilities
-- [ ] Create `agentbench/util/git.py`:
+- [x] Create `agentbench/util/git.py`:
   - Function `clone_repo(url: str, dest: Path, logs_dir: Path) -> tuple[int, Path, Path]`:
     - Run `git clone <url> <dest>`
     - Capture stdout/stderr to log files
@@ -150,11 +151,17 @@ Baseline validation ensures that a task's tests **fail** before any agent interv
     - Capture stdout/stderr to log files
     - Return (exit_code, stdout_path, stderr_path)
 
+### Unit Tests for Validator
+- [x] Create `agentbench/tasks/tests/test_validator.py`:
+  - 2 integration tests (marked with `@pytest.mark.integration` and `@pytest.mark.docker`)
+  - 6 unit tests with mocked DockerSandbox, clone_repo, checkout_commit
+  - Tests cover: valid baseline, invalid baseline, setup failure, setup timeout, run timeout, no tests collected
+
 ### End of Day 2 Checkpoint
-- [ ] `validate_baseline()` correctly identifies toy_fail_pytest as valid (tests fail)
-- [ ] If you temporarily fix the bug in toy_repo, validator should mark it invalid
-- [ ] Setup failures are caught and reported
-- [ ] Git utilities work and log properly
+- [x] `validate_baseline()` correctly identifies toy_fail_pytest as valid (tests fail)
+- [x] If you temporarily fix the bug in toy_repo, validator should mark it invalid
+- [x] Setup failures are caught and reported
+- [x] Git utilities work and log properly
 
 ---
 
@@ -395,20 +402,21 @@ agentbench/
   tasks/
     __init__.py              DONE (Day 1)
     loader.py                DONE (Day 1)
-    models.py                DONE (Day 1) - TaskSpec and nested models
+    models.py                DONE (Day 1) - TaskSpec, nested models, ValidationResult
     validation.py            DONE (Day 1) - validate_task_yaml() extracted from run_task.py
-    validator.py             TODO (Day 2)
+    validator.py             DONE (Day 2) - validate_baseline() with exit code handling
     exceptions.py            DONE (Day 1)
     tests/
       __init__.py            DONE (Day 1)
       test_loader.py         DONE (Day 1) - 10 tests passing
+      test_validator.py      DONE (Day 2) - 8 tests (2 integration, 6 unit)
   
   schemas/
     __init__.py              TODO (if not exists)
     attempt_record.py        TODO (Day 3)
   
   util/
-    git.py                   TODO (Day 2)
+    git.py                   DONE (Day 2) - clone_repo(), checkout_commit()
     jsonl.py                 TODO (Day 3)
   
   suite_runner.py            TODO (Day 4)
