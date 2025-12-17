@@ -10,8 +10,9 @@ import yaml
 
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.util.paths import ensure_dir
-from agentbench.tasks.validation import validate_task_yaml
-from agentbench.util.process import run_command
+from agentbench.util.process import check_exit_code
+from agentbench.util.git import clone_repo, checkout_commit
+from agentbench.tasks.loader import load_task
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +20,22 @@ logger = logging.getLogger(__name__)
 def run_task(
     task_yaml: Path,
     out_dir: Path,
-    str_format: str = "%Y-%m-%d_%H-%M-%S",
+    str_format: str = "%Y-%m-%d_%H-%M-%S"
 ) -> Path:
+
+    """
+    ### Integrate with Existing Code
+    - [ ] Refactor `run_task.py` to use `TaskSpec` from loader:
+    - Change `run_task(task_yaml: Path, ...)` to internally use `load_task()`
+    - Keep the function signature the same for CLI compatibility
+    - Extract common logic (git clone, checkout) into helper functions in `agentbench/util/git.py`
+    """
+
     logger.info("Loading task from %s", task_yaml)
 
-    with open(task_yaml) as f:
-        task = yaml.safe_load(f)
+    task = load_task(task_yaml)
 
-    # validate keys
-    validate_task_yaml(task, task_yaml)
-
-    logger.debug("Task validated successfully: %s", task.get("id", "unknown"))
+    logger.debug("Task validated successfully: %s", task.id)
 
     out_dir = ensure_dir(out_dir)
     runs_dir = ensure_dir(Path(out_dir / "runs"))
@@ -37,7 +43,7 @@ def run_task(
     timestamp = datetime.now().strftime(str_format)
     run_id = str(ulid.new())
 
-    logger.info("Starting run %s for task %s", run_id, task.get("id", "unknown"))
+    logger.info("Starting run %s for task %s", run_id, task.id)
 
     curr_run_dir = ensure_dir(Path(runs_dir, f"{timestamp}__{run_id}"))
 
@@ -52,40 +58,40 @@ def run_task(
     repo_dir = ensure_dir(Path(workspace_dir, "repo"))
 
     # clone the repo
-    logger.info("Cloning repository from %s", task["repo"]["url"])
-    cmd = ["git", "clone", task["repo"]["url"], str(repo_dir)]
-    timeout = 120
-    stdout_path, stderr_path, exit_code = run_command(
-        "git_clone", cmd, timeout, logs_dir
+    logger.info("Cloning repository from %s", task.repo.url)
+    stdout_path, stderr_path, exit_code = clone_repo(
+        url=task.repo.url,
+        dest=repo_dir,
+        logs_dir=logs_dir
     )
 
-    if exit_code != 0:
-        logger.error("Git clone failed with exit code %d", exit_code)
-        raise ValueError("git clone operation failed")
+    error = check_exit_code("git_clone", exit_code)
+    if error is not None:
+        raise error
 
     logger.debug("Repository cloned successfully")
 
     # checkout the commit
-    logger.info("Checking out commit %s", task["repo"]["commit"])
-    cmd = ["git", "checkout", task["repo"]["commit"]]
-    timeout = 120
-    stdout_path, stderr_path, exit_code = run_command(
-        "git_checkout", cmd, timeout, logs_dir, cwd=repo_dir
+    logger.info("Checking out commit %s", task.repo.commit)
+    stdout_path, stderr_path, exit_code = checkout_commit(
+        repo_dir=repo_dir,
+        commit=task.repo.commit,
+        logs_dir=logs_dir
     )
 
-    if exit_code != 0:
-        logger.error("Git checkout failed with exit code %d", exit_code)
-        raise ValueError("git checkout operation failed")
+    error = check_exit_code("git_checkout", exit_code)
+    if error is not None:
+        raise error
 
     logger.debug("Commit checked out successfully")
 
-    logger.info("Initializing Docker sandbox with image %s", task["environment"]["docker_image"])
+    logger.info("Initializing Docker sandbox with image %s", task.environment.docker_image)
     sandbox = DockerSandbox(
-        image=task["environment"]["docker_image"],
-        workdir=task["environment"]["workdir"],
+        image = task.environment.docker_image,
+        workdir = task.environment.workdir,
     )
 
-    setup_commands = " && ".join(task["setup"]["commands"])
+    setup_commands = " && ".join(task.setup.commands)
     repo_relative_path = "repo"
     setup_commands = f"cd {repo_relative_path} && {setup_commands}"
 
@@ -95,7 +101,7 @@ def run_task(
         workspace_host_path=workspace_dir,
         command=setup_commands,
         network="bridge",
-        timeout_sec=task["environment"]["timeout_sec"],
+        timeout_sec=task.environment.timeout_sec,
         stdout_path=Path(logs_dir, "setup_stdout.txt"),
         stderr_path=Path(logs_dir, "setup_stderr.txt"),
     )
@@ -106,7 +112,7 @@ def run_task(
 
     logger.debug("Setup completed successfully")
 
-    run_cmd = task["run"]["command"]
+    run_cmd = task.run.command
     run_cmd = f"cd repo && {run_cmd}"
 
     logger.info("Running task command")
@@ -115,7 +121,7 @@ def run_task(
         workspace_host_path=workspace_dir,
         command=run_cmd,
         network="none",
-        timeout_sec=task["environment"]["timeout_sec"],
+        timeout_sec=task.environment.timeout_sec,
         stdout_path=Path(logs_dir, "run_stdout.txt"),
         stderr_path=Path(logs_dir, "run_stderr.txt"),
     )
@@ -126,7 +132,7 @@ def run_task(
                 "docker",
                 "image",
                 "inspect",
-                task["environment"]["docker_image"],
+                task.environment.docker_image,
                 "--format={{.Id}}",
             ],
             capture_output=True,
@@ -151,15 +157,15 @@ def run_task(
 
     run_data = {
         "run_id": run_id,
-        "task_id": task["id"],
-        "repo_url": task["repo"]["url"],
-        "repo_commit": task["repo"]["commit"],
-        "docker_image": task["environment"]["docker_image"],
+        "task_id": task.id,
+        "repo_url": task.repo.url,
+        "repo_commit": task.repo.commit,
+        "docker_image": task.environment.docker_image,
         "docker_image_digest": image_digest,
         "network_settings": {"Setup": "bridge", "Run": "none"},
         "commands_executed": {
-            "setup": task["setup"]["commands"],
-            "run": task["run"]["command"],
+            "setup": task.setup.commands,
+            "run": task.run.command,
         },
         "exit_codes": {
             "Setup exit code": str(setup_run_result.exit_code),

@@ -11,7 +11,7 @@ def run_command(
         cmd: list[str],
         timeout: int,
         logs_dir: Path,
-        cwd: Path | None = None,
+        cwd: Path | None = None
     ):
         stdout_path = Path(logs_dir, f"{cmd_name}_stdout.txt")
         stderr_path = Path(logs_dir, f"{cmd_name}_stderr.txt")
@@ -50,3 +50,8 @@ def run_command(
                 exit_code = 124
 
         return stdout_path, stderr_path, exit_code
+
+def check_exit_code(cmd_name: str, exit_code: int, success: int = 0) -> Exception | None:
+    if exit_code != success:
+        logger.error("%s failed with exit code %d", cmd_name, exit_code)
+        return ValueError(f'Operation {cmd_name} failed')

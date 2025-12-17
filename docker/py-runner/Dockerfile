@@ -16,4 +16,8 @@ PYTHONUNBUFFERED=1
 
 USER runner
 
+RUN pip install --user --no-cache-dir pytest
+
+ENV PATH="/home/runner/.local/bin:$PATH"
+
 

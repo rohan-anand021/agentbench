@@ -1,7 +1,49 @@
-.venv/  
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
 __pycache__/
 *.pyc
-artifacts/
+*.pyo
+*.pyd
+.Python
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.pytype/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Project specific
+artifacts/
+temp_dir_whp/
+
+# Environment
 .env
+.env.local
+
+# Dependency lock (if preferred)
 uv.lock

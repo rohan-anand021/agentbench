@@ -2,8 +2,8 @@ id: toy_fail_pytest
 suite: custom-dev
 
 repo:
-  url: ../../../examples/toy_repo
-  commit: a3219a9adc9f143c379d38d76a77cd969380f90d
+  url: examples/toy_repo
+  commit: 8b2d107781ccba9ae05308d60cde2e6fd074db8f
 
 environment:
   docker_image: ghcr.io/agentbench/py-runner:0.1.0
@@ -13,8 +13,7 @@ environment:
 setup:
   commands:
     - pip install --upgrade pip
-    - pip install pytest
-    - pip install -e .
+    - pip install . --target=/workspace/site-packages
 
 run:
-  command: pytest -q
+  command: PYTHONPATH=/workspace/site-packages pytest -q
