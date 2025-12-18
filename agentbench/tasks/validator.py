@@ -197,7 +197,7 @@ def validate_baseline(
                 exit_code=exit_code if exit_code is not None else -1,
                 failure_reason=error_details,
             ),
-            artifacts_path=artifacts,
+            artifact_paths=artifacts,
         )
         attempts_file = logs_dir.parent / "attempts.jsonl"
         append_jsonl(attempts_file, attempt_record.model_dump(mode="json"))

@@ -1,9 +1,13 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class TimestampInfo(BaseModel):
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+    )
+
     started_at: datetime
     ended_at: datetime
 
@@ -18,6 +22,37 @@ class TaskResult(BaseModel):
     passed: bool
     exit_code: int
     failure_reason: str | None
+
+class ModelConfig(BaseModel):
+    """
+     ### Create ModelConfig Schema
+        - [ ] Add `ModelConfig` to `agentbench/schemas/attempt_record.py`:
+        - `provider: str | None` — e.g., "openrouter", "anthropic", None for scripted
+        - `name: str | None` — e.g., "anthropic/claude-3.5-sonnet", None for scripted
+        - `temperature: float | None` — sampling temperature
+        - `top_p: float | None` — nucleus sampling parameter
+        - `max_tokens: int | None` — max completion tokens
+        - `prompt_version: str | None` — hash of system prompt (e.g., "system_v1@sha256:abc123")
+    """
+
+    provider: str | None
+    name: str | None
+    temperature: float | None
+    top_p: float | None
+    max_tokens: int | None
+    prompt_version: str | None
+
+
+class LimitsConfig(BaseModel):
+    """
+    ### Create LimitsConfig Schema
+        - [ ] Add `LimitsConfig` to `agentbench/schemas/attempt_record.py`:
+        - `timeout_sec: int` — overall task timeout
+        - `tool_timeout_sec: int | None` — per-tool-call timeout (optional, Week 4+)
+    """
+
+    timeout_sec: int
+    tool_timeout_sec: int | None
 
 
 class AttemptRecord(BaseModel):
@@ -40,6 +75,18 @@ class AttemptRecord(BaseModel):
         - `TaskResult`: `passed: bool`, `exit_code: int`, `failure_reason: str | None`
     """
 
+    """
+    Missing fields from spec (`plan/spec.txt` lines 256-296):
+        - `variant: str` — agent variant name (e.g., "baseline", "context_packer")
+        - `model: ModelConfig | None` — LLM configuration snapshot
+        - `limits: LimitsConfig` — timeout configuration
+        - `schema_version: str` — for future compatibility
+    """
+
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+    )
+
     run_id: str
     task_id: str
     suite: str
@@ -47,4 +94,8 @@ class AttemptRecord(BaseModel):
     duration_sec: float
     baseline_validation: BaselineValidationResult
     result: TaskResult
-    artifacts_path: dict[str, str]
+    artifact_paths: dict[str, str]
+    variant: str
+    model: ModelConfig | None
+    limits: LimitsConfig
+    schema_version: str

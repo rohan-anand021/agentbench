@@ -1,9 +1,13 @@
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 class RepoSpec(BaseModel):
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+    )
+
     url: str
     commit: str
 
@@ -23,6 +27,10 @@ class RunSpec(BaseModel):
 
 
 class TaskSpec(BaseModel):
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+    )
+
     id: str
     suite: str
     repo: RepoSpec
@@ -30,6 +38,10 @@ class TaskSpec(BaseModel):
     setup: SetupSpec
     run: RunSpec
     source_path: Path
+
+    @field_serializer("source_path")
+    def serialize_path(self, v: Path) -> str:
+        return str(v)
 
 
 # ---
@@ -47,6 +59,10 @@ class ValidationResult(BaseModel):
     - `duration_sec: float`
     """
 
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+    )
+
     task_id: str
     valid: bool
     exit_code: int
@@ -54,3 +70,7 @@ class ValidationResult(BaseModel):
     stderr_path: Path
     error_reason: str | None
     duration_sec: float
+
+    @field_serializer("stdout_path", "stderr_path")
+    def serialize_paths(self, v: Path) -> str:
+        return str(v)

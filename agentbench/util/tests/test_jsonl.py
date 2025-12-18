@@ -193,7 +193,7 @@ class TestAttemptRecordSchema:
                 "exit_code": 1,
                 "failure_reason": None,
             },
-            "artifacts_path": {
+            "artifact_paths": {
                 "stdout": "/path/to/stdout.txt",
                 "stderr": "/path/to/stderr.txt",
             },
