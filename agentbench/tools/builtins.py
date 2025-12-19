@@ -2,6 +2,9 @@ from pathlib import Path
 from datetime import datetime
 from collections import deque
 import subprocess
+import json
+from typing import Any
+
 from agentbench.tools.contract import (
     ListFilesParams, 
     ReadFileParams,
@@ -12,6 +15,7 @@ from agentbench.tools.contract import (
     SearchParams
 )
 from agentbench.sandbox.filesystem import safe_glob, resolve_safe_path
+from agentbench.util.process import check_exit_code
 
 def list_files(
     request_id: str,
@@ -174,32 +178,87 @@ def search(
     """
 
     error = None
-    data = None
+    timeout = 60
     started_at = datetime.now()
-    params.glob = params.glob if params.glob else "*"
+    data: dict[str, Any] = {}
 
-    search_cmd = ["rg", 
-                  "--json", 
-                  f"--max-count={params.max_results}", 
-                  "--no-heading",
-                  f"{params.query}",
-                  f"{params.glob}"]
+    cmd = ["rg", 
+            "--json", 
+            "--no-heading",
+            "--ignore-case",]
 
+    if not params.is_regex:
+        cmd.append("--fixed-strings")
+    cmd.extend([f"{params.query}", 
+                f"--context={params.context_lines}"])
+    
+    if params.glob:
+        cmd.append(f"--glob={params.glob}")
+    
     try:
-        search_run = subprocess.run(
-            args = search_cmd,
+        run = subprocess.run(
+            args = cmd,
+            cwd = workspace_root,
             capture_output = True,
             text = True,
             timeout = 60,
             check = False
         )
 
+        if run.returncode != 0:
+            if run.returncode == 1:
+                pass
+            else:
+                error = check_exit_code("search", run.returncode)
         
+        match_count = 0
+        matches: list[dict] = []
+        context_buffer: list[str] = []
+        current_match: dict | None = None
 
-        data = {
+        for line in run.stdout.strip().splitlines():
+            obj = json.loads(line)
 
-        }
-    
+            if obj["type"] == "context":
+                context_line = obj["data"]["lines"]["text"].rstrip('\n')
+                if current_match is None:
+                    context_buffer.append(context_line)
+                else:
+                    if current_match["context_after"] is None:
+                        current_match["context_after"] = []
+                    current_match["context_after"].append(context_line)
+
+            elif obj["type"] == "match":
+                if current_match is not None:
+                    matches.append(current_match)
+                
+                match_count += 1
+                if match_count > params.max_results:
+                    break
+
+                current_match = {
+                    "file": obj["data"]["path"]["text"],
+                    "line": obj["data"]["line_number"],
+                    "content": obj["data"]["lines"]["text"].rstrip('\n'),
+                    "context_before": context_buffer.copy() if context_buffer else None,
+                    "context_after": None
+                }
+                context_buffer.clear()
+
+            elif obj["type"] == "begin":
+                context_buffer.clear()
+
+            elif obj["type"] == "end":
+                if current_match is not None:
+                    matches.append(current_match)
+                    current_match = None
+                context_buffer.clear()
+
+        data["matches"] = matches
+        data["truncated"] = match_count > params.max_results
+        data["total_matches"] = min(match_count, params.max_results)
+                    
+
     except subprocess.TimeoutExpired as e:
         error = e
     except OSError as e:
@@ -212,8 +271,14 @@ def search(
         if error is not None:
             if isinstance(error, subprocess.TimeoutExpired):
                 error_obj = ToolError(
-                    error_type = "binary_file",
-                    message = "Cannot read binary file",
+                    error_type = "timeout",
+                    message = f"Operation timed out after {timeout} seconds",
+                    details = {}
+                )
+            elif isinstance(error, OSError):
+                error_obj = ToolError(
+                    error_type = "docker",
+                    message = f"Docker unavailable: {str(error)}",
                     details = {}
                 )
             else:
@@ -225,7 +290,7 @@ def search(
 
         return ToolResult(
             request_id = request_id,
-            tool = ToolName.READ_FILE,
+            tool = ToolName.SEARCH,
             status = ToolStatus.SUCCESS if not error else ToolStatus.ERROR,
             started_at = started_at,
             ended_at = ended_at,

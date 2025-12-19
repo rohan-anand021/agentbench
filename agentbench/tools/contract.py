@@ -29,6 +29,7 @@ class SearchParams(BaseModel):
     glob: str | None = None
     max_results: int = 50
     context_lines: int = 2
+    is_regex: bool = False
 
 class ApplyPatchParams(BaseModel):
     unified_diff: str
