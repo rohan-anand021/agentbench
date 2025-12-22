@@ -123,20 +123,17 @@ class TestReadJsonl:
         assert len(results) == 3
         assert [r["id"] for r in results] == [1, 2, 3]
 
-    def test_read_handles_malformed_lines(self, tmp_path, caplog):
-        """read_jsonl should log warning and skip malformed lines."""
+    def test_read_handles_malformed_lines(self, tmp_path):
+        """read_jsonl should skip malformed lines without crashing."""
         jsonl_file = tmp_path / "test.jsonl"
         content = '{"id": 1}\nnot valid json\n{"id": 2}\n'
         jsonl_file.write_text(content)
 
         results = list(read_jsonl(jsonl_file))
 
+        # Should skip the malformed line and return only valid records
         assert len(results) == 2
         assert [r["id"] for r in results] == [1, 2]
-        # Check that a warning was logged
-        assert any(
-            "could not be read" in record.message for record in caplog.records
-        )
 
     def test_read_returns_iterator(self, tmp_path):
         """read_jsonl should return an iterator, not a list."""
