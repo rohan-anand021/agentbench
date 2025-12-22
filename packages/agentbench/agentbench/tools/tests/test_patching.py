@@ -1,18 +1,16 @@
-import pytest
 import tempfile
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
+import pytest
+
+from agentbench.schemas.events import Event, EventType
+from agentbench.tools.contract import ApplyPatchParams, ToolStatus
 from agentbench.tools.patching import (
+    apply_patch,
     parse_unified_diff,
     validate_patch,
-    apply_patch,
-    FilePatch,
-    PatchHunk,
 )
-from agentbench.tools.contract import ApplyPatchParams, ToolStatus
-from agentbench.schemas.events import Event, EventType
-
 
 # Sample patches for testing
 SIMPLE_PATCH = """\
@@ -72,13 +70,13 @@ class TestParseUnifiedDiff:
     def test_parse_simple_patch(self):
         """Single file, single hunk."""
         patches = parse_unified_diff(SIMPLE_PATCH)
-        
+
         assert len(patches) == 1
         patch = patches[0]
         assert patch.old_path == "src/main.py"
         assert patch.new_path == "src/main.py"
         assert len(patch.hunks) == 1
-        
+
         hunk = patch.hunks[0]
         assert hunk.old_start == 1
         assert hunk.old_count == 3
@@ -88,7 +86,7 @@ class TestParseUnifiedDiff:
     def test_parse_multi_file_patch(self):
         """Multiple files in one patch."""
         patches = parse_unified_diff(MULTI_FILE_PATCH)
-        
+
         assert len(patches) == 2
         assert patches[0].old_path == "src/main.py"
         assert patches[1].old_path == "src/utils.py"
@@ -96,7 +94,7 @@ class TestParseUnifiedDiff:
     def test_parse_new_file(self):
         """Patch creates a new file."""
         patches = parse_unified_diff(NEW_FILE_PATCH)
-        
+
         assert len(patches) == 1
         patch = patches[0]
         assert patch.old_path == "/dev/null"
@@ -105,7 +103,7 @@ class TestParseUnifiedDiff:
     def test_parse_delete_file(self):
         """Patch deletes a file."""
         patches = parse_unified_diff(DELETE_FILE_PATCH)
-        
+
         assert len(patches) == 1
         patch = patches[0]
         assert patch.old_path == "src/old_file.py"
@@ -118,39 +116,39 @@ class TestValidatePatch:
     def test_validate_path_escape(self):
         """Patch with ../ is rejected."""
         patches = parse_unified_diff(PATH_ESCAPE_PATCH)
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             errors = validate_patch(workspace, patches)
-            
+
             assert len(errors) > 0
             assert any("escapes" in err for err in errors)
 
     def test_validate_file_not_found(self):
         """Patch targets file that doesn't exist."""
         patches = parse_unified_diff(SIMPLE_PATCH)
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             errors = validate_patch(workspace, patches)
-            
+
             assert len(errors) > 0
             assert any("does not exist" in err for err in errors)
 
     def test_validate_context_mismatch(self):
         """Context lines don't match file content."""
         patches = parse_unified_diff(SIMPLE_PATCH)
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             src_dir = workspace / "src"
             src_dir.mkdir()
-            
+
             # Create file with different content
             (src_dir / "main.py").write_text("def bar():\n    return\n")
-            
+
             errors = validate_patch(workspace, patches)
-            
+
             assert len(errors) > 0
             assert any("context" in err.lower() or "does not match" in err for err in errors)
 
@@ -166,17 +164,17 @@ class TestApplyPatch:
             artifacts.mkdir()
             src_dir = workspace / "src"
             src_dir.mkdir()
-            
+
             # Create file with matching content
             (src_dir / "main.py").write_text("def foo():\n    pass\n")
-            
+
             params = ApplyPatchParams(unified_diff=SIMPLE_PATCH)
             result = apply_patch(workspace, params, step_id=1, artifacts_dir=artifacts)
-            
+
             assert result.status == ToolStatus.SUCCESS
             assert result.data is not None
             assert "changed_files" in result.data
-            
+
             # Verify file was modified
             content = (src_dir / "main.py").read_text()
             assert 'print("hello")' in content
@@ -190,13 +188,13 @@ class TestApplyPatch:
             artifacts.mkdir()
             src_dir = workspace / "src"
             src_dir.mkdir()
-            
+
             # Create file with different content
             (src_dir / "main.py").write_text("def bar():\n    return 42\n")
-            
+
             params = ApplyPatchParams(unified_diff=SIMPLE_PATCH)
             result = apply_patch(workspace, params, step_id=1, artifacts_dir=artifacts)
-            
+
             assert result.status == ToolStatus.ERROR
             assert result.error is not None
             assert result.error.error_type == "patch_hunk_fail"
@@ -209,15 +207,15 @@ class TestApplyPatch:
             artifacts.mkdir()
             src_dir = workspace / "src"
             src_dir.mkdir()
-            
+
             # Create file with matching content
             (src_dir / "main.py").write_text("def foo():\n    pass\n")
-            
+
             params = ApplyPatchParams(unified_diff=SIMPLE_PATCH)
             result = apply_patch(workspace, params, step_id=1, artifacts_dir=artifacts)
-            
+
             assert result.status == ToolStatus.SUCCESS
-            
+
             # Check artifact was saved
             artifact_path = artifacts / "step_0001.patch"
             assert artifact_path.exists()
@@ -226,7 +224,7 @@ class TestApplyPatch:
 
 class TestApplyPatchEvents:
     """Tests for PATCH_APPLIED event emission."""
-    
+
     def test_apply_emits_event(self):
         """PATCH_APPLIED event is logged with correct payload."""
         # Note: This test verifies the ToolResult contains the data needed for event emission
@@ -237,21 +235,21 @@ class TestApplyPatchEvents:
             artifacts.mkdir()
             src_dir = workspace / "src"
             src_dir.mkdir()
-            
+
             (src_dir / "main.py").write_text("def foo():\n    pass\n")
-            
+
             params = ApplyPatchParams(unified_diff=SIMPLE_PATCH)
             result = apply_patch(workspace, params, step_id=5, artifacts_dir=artifacts)
-            
+
             assert result.status == ToolStatus.SUCCESS
             assert result.data is not None
-            
+
             # Verify data contains fields needed for PATCH_APPLIED event
             assert "changed_files" in result.data
             assert "patch_size_bytes" in result.data
             assert isinstance(result.data["changed_files"], list)
             assert result.data["patch_size_bytes"] > 0
-            
+
             # Verify we can construct an event from the result
             event = Event(
                 event_type=EventType.PATCH_APPLIED,

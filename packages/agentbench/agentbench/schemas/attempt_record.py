@@ -20,9 +20,8 @@ Versioning Strategy:
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-
 from agentbench.scoring import FailureReason
+from pydantic import BaseModel, ConfigDict
 
 
 class TimestampInfo(BaseModel):

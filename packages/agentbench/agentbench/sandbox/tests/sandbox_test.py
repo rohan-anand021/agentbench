@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 
 

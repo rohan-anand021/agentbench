@@ -3,9 +3,7 @@
 import json
 from datetime import datetime
 
-import pytest
-from pydantic import ValidationError
-
+from agentbench.schemas.events import Event, EventType
 from agentbench.tools.contract import (
     ApplyPatchParams,
     ListFilesParams,
@@ -18,7 +16,6 @@ from agentbench.tools.contract import (
     ToolResult,
     ToolStatus,
 )
-from agentbench.schemas.events import Event, EventType
 
 
 class TestToolRequestSerialization:

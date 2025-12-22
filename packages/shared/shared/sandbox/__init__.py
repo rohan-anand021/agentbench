@@ -1,6 +1,6 @@
 """Shared sandbox utilities."""
 
-from shared.sandbox.docker_sandbox import DockerSandbox, DockerRunResult
+from shared.sandbox.docker_sandbox import DockerRunResult, DockerSandbox
 from shared.sandbox.filesystem import (
     PathEscapeError,
     SymLinkError,

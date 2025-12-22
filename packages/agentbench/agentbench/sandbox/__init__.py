@@ -1,8 +1,8 @@
 """Sandbox utilities - re-exported from shared package."""
 
 from shared.sandbox import (
-    DockerSandbox,
     DockerRunResult,
+    DockerSandbox,
     PathEscapeError,
     SymLinkError,
     resolve_safe_path,

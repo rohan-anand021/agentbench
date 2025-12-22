@@ -1,21 +1,22 @@
-from pathlib import Path
-from datetime import datetime
-from collections import deque
-import subprocess
 import json
+import subprocess
+from collections import deque
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from agentbench.sandbox.filesystem import resolve_safe_path, safe_glob
 from agentbench.tools.contract import (
-    ListFilesParams, 
+    ListFilesParams,
     ReadFileParams,
-    ToolResult, 
-    ToolName, 
-    ToolError, 
+    SearchParams,
+    ToolError,
+    ToolName,
+    ToolResult,
     ToolStatus,
-    SearchParams
 )
-from agentbench.sandbox.filesystem import safe_glob, resolve_safe_path
 from agentbench.util.process import check_exit_code
+
 
 def list_files(
     request_id: str,
@@ -24,14 +25,14 @@ def list_files(
 ) -> ToolResult:
     """
     List files in a directory within the workspace.
-    
+
     Returns files in deterministic sorted order.
     Filters out .git directory by default.
     """
 
     if params.glob is None:
         params.glob = '*'
-    
+
     error = None
     data = None
     started_at = datetime.now()
@@ -48,10 +49,10 @@ def list_files(
         )
 
         data = {"files": [str(f) for f in files]}
-    
+
     except Exception as e:
         error = e
-    
+
     finally:
         ended_at = datetime.now()
 
@@ -82,7 +83,7 @@ def read_file(
 
     """
     Read file contents with optional line range.
-    
+
     Line numbers are 1-indexed and inclusive.
     Truncates large files with clear metadata.
     """
@@ -105,7 +106,7 @@ def read_file(
             for i, line in enumerate(f, start=1):
                 total_lines = i
                 stripped = line.rstrip('\n')
-                
+
                 if i <= 5000:
                     first_lines.append(stripped)
                 else:
@@ -126,13 +127,13 @@ def read_file(
             "end_line": total_lines if not truncated else None,
             "lines_included": None if not truncated else f"1-5000, {total_lines - 4999}-{total_lines}"
         }
-        
+
     except FileNotFoundError as e:
         error = e
 
     except UnicodeDecodeError as e:
         error = e
-    
+
     finally:
         ended_at = datetime.now()
 
@@ -173,7 +174,7 @@ def search(
 ) -> ToolResult:
     """
     Search for text patterns across files.
-    
+
     Uses ripgrep (rg) if available, falls back to Python.
     """
 
@@ -182,19 +183,19 @@ def search(
     started_at = datetime.now()
     data: dict[str, Any] = {}
 
-    cmd = ["rg", 
-            "--json", 
+    cmd = ["rg",
+            "--json",
             "--no-heading",
             "--ignore-case",]
 
     if not params.is_regex:
         cmd.append("--fixed-strings")
-    cmd.extend([f"{params.query}", 
+    cmd.extend([f"{params.query}",
                 f"--context={params.context_lines}"])
-    
+
     if params.glob:
         cmd.append(f"--glob={params.glob}")
-    
+
     try:
         run = subprocess.run(
             args = cmd,
@@ -210,7 +211,7 @@ def search(
                 pass
             else:
                 error = check_exit_code("search", run.returncode)
-        
+
         match_count = 0
         matches: list[dict] = []
         context_buffer: list[str] = []
@@ -231,7 +232,7 @@ def search(
             elif obj["type"] == "match":
                 if current_match is not None:
                     matches.append(current_match)
-                
+
                 match_count += 1
                 if match_count > params.max_results:
                     break
@@ -257,7 +258,7 @@ def search(
         data["matches"] = matches
         data["truncated"] = match_count > params.max_results
         data["total_matches"] = min(match_count, params.max_results)
-                    
+
 
     except subprocess.TimeoutExpired as e:
         error = e

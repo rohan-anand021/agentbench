@@ -1,7 +1,8 @@
-from enum import StrEnum
 from datetime import datetime
-from pydantic import BaseModel
+from enum import StrEnum
 from typing import Any
+
+from pydantic import BaseModel
 
 
 class EventType(StrEnum):

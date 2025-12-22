@@ -34,14 +34,14 @@ def validate_baseline(
     """
 
     """
-    - `BaselineValidationResult`: 
-        `attempted: bool`, 
-        `failed_as_expected: bool`, 
+    - `BaselineValidationResult`:
+        `attempted: bool`,
+        `failed_as_expected: bool`,
         `exit_code: int`
 
-    - `TaskResult`: 
-        `passed: bool`, 
-        `exit_code: int`, 
+    - `TaskResult`:
+        `passed: bool`,
+        `exit_code: int`,
         `failure_reason: str | None`
     """
 

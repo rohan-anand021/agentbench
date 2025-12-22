@@ -1,8 +1,6 @@
 from datetime import UTC, datetime, timezone
 
 import pytest
-from pydantic import ValidationError
-
 from agentbench.schemas.attempt_record import (
     AttemptRecord,
     BaselineValidationResult,
@@ -11,6 +9,7 @@ from agentbench.schemas.attempt_record import (
     TaskResult,
     TimestampInfo,
 )
+from pydantic import ValidationError
 
 
 def make_valid_attempt_record(**overrides) -> AttemptRecord:

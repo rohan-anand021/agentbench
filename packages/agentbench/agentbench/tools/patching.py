@@ -1,11 +1,18 @@
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import subprocess
-import tempfile
-import shutil
 
-from agentbench.tools.contract import ToolResult, ApplyPatchParams, ToolError, ToolStatus, ToolName
+from agentbench.tools.contract import (
+    ApplyPatchParams,
+    ToolError,
+    ToolName,
+    ToolResult,
+    ToolStatus,
+)
+
 
 @dataclass
 class PatchHunk:
@@ -75,7 +82,7 @@ def parse_unified_diff(patch_txt: str) -> list[FilePatch]:
                         lines = file_lines
                     )]
                 )
-                all_patches.append(file_patch) 
+                all_patches.append(file_patch)
                 file_lines = []
             raw_old_path = line.split("--- ")[1]
             old_path = raw_old_path if raw_old_path == "/dev/null" else raw_old_path.lstrip("a/")
@@ -89,7 +96,7 @@ def parse_unified_diff(patch_txt: str) -> list[FilePatch]:
             new_start, new_count = abs(int(hunks[1].split(",")[0])), abs(int(hunks[1].split(",")[1]))
         else:
             file_lines.append(line)
-    
+
     if old_path is not None:
         file_patch = FilePatch(
             old_path = old_path,
@@ -103,7 +110,7 @@ def parse_unified_diff(patch_txt: str) -> list[FilePatch]:
             )]
         )
         all_patches.append(file_patch)
-    
+
     return all_patches
 
 
@@ -132,51 +139,51 @@ def validate_patch(
     """
 
     errors: list[str] = []
-    
+
     FUZZ_LIMIT = 3
-    
+
     for patch in patches:
         old_path = patch.old_path
         new_path = patch.new_path
         is_new_file = old_path == "/dev/null" or old_path is None
-        
+
         if old_path and old_path != "/dev/null":
             old_full = workspace_root / old_path
             if not old_full.resolve().is_relative_to(workspace_root.resolve()):
                 errors.append(f"{old_path} escapes workspace root")
                 continue
-                
+
         if new_path and new_path != "/dev/null":
             new_full = workspace_root / new_path
             if not new_full.resolve().is_relative_to(workspace_root.resolve()):
                 errors.append(f"{new_path} escapes workspace root")
                 continue
-        
+
         if not is_new_file and old_path:
             old_full = workspace_root / old_path
             if not old_full.exists():
                 errors.append(f"{old_path} does not exist")
                 continue
-            
+
             try:
                 file_content = old_full.read_text(encoding="utf-8")
                 file_lines = file_content.splitlines()
             except UnicodeDecodeError:
                 errors.append(f"{old_path} contains invalid UTF-8 encoding")
                 continue
-            
+
             for hunk in patch.hunks:
                 hunk_start = hunk.old_start - 1
-                
+
                 if hunk_start < 0 or hunk_start > len(file_lines) + FUZZ_LIMIT:
                     errors.append(f"{old_path}: hunk at line {hunk.old_start} is outside file bounds (fuzz limit {FUZZ_LIMIT})")
                     continue
-                
+
                 expected_lines = []
                 for line in hunk.lines:
                     if line.startswith(" ") or line.startswith("-"):
                         expected_lines.append(line[1:])
-                
+
                 if expected_lines:
                     matched = False
                     for offset in range(-FUZZ_LIMIT, FUZZ_LIMIT + 1):
@@ -187,7 +194,7 @@ def validate_patch(
                         if actual_slice == expected_lines:
                             matched = True
                             break
-                    
+
                     if not matched:
                         errors.append(f"{old_path}: context at line {hunk.old_start} does not match file content")
 
@@ -207,14 +214,14 @@ def apply_patch(
     with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
         f.write(params.unified_diff)
         patch_file = f.name
-    
+
     dry_run = subprocess.run(
-        ["patch", 
-        "--dry-run", 
-        "-p1", 
-        "-d", 
-        str(workspace_root), 
-        "-i", 
+        ["patch",
+        "--dry-run",
+        "-p1",
+        "-d",
+        str(workspace_root),
+        "-i",
         patch_file],
         capture_output=True,
         text=True
@@ -236,13 +243,13 @@ def apply_patch(
                 details={"stderr": dry_run.stderr}
             )
         )
-    
+
     subprocess.run(
-        ["patch", 
-        "-p1", 
-        "-d", 
-        str(workspace_root), 
-        "-i", 
+        ["patch",
+        "-p1",
+        "-d",
+        str(workspace_root),
+        "-i",
         patch_file],
         capture_output=True,
         text=True
@@ -255,7 +262,7 @@ def apply_patch(
     changed_files = [p.new_path for p in patches if p.new_path and p.new_path != "/dev/null"]
 
     ended_at = datetime.now()
-    
+
     return ToolResult(
         request_id=request_id,
         tool=ToolName.APPLY_PATCH,
