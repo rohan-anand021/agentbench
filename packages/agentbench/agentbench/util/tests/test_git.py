@@ -1,9 +1,7 @@
 """Unit tests for git utilities."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from agentbench.util.git import checkout_commit, clone_repo
 

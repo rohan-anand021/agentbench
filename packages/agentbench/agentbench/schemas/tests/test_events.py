@@ -3,9 +3,8 @@
 from datetime import datetime, timezone
 
 import pytest
-from pydantic import ValidationError
-
 from agentbench.schemas.events import Event, EventType
+from pydantic import ValidationError
 
 
 class TestEventTypeEnum:

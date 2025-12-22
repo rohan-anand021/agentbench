@@ -1,9 +1,6 @@
 """Unit tests for logging configuration."""
 
 import logging
-from io import StringIO
-
-import pytest
 
 from agentbench.logging import get_logger, setup_logging
 

@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from agentbench.sandbox.docker_sandbox import DockerRunResult, DockerSandbox
 
 
