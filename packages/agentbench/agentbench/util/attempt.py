@@ -70,7 +70,7 @@ class AttemptContext:
         self.logs_dir = logs_dir
         self.variant = variant
 
-        self.run_id = str(ulid.new())
+        self.run_id = str(ulid.ULID())
         self.attempted = False
         self.valid = False
 

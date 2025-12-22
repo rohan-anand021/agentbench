@@ -197,6 +197,13 @@ class TestAttemptRecordSchema:
                 "stdout": "/path/to/stdout.txt",
                 "stderr": "/path/to/stderr.txt",
             },
+            "variant": "baseline",
+            "model": None,
+            "limits": {
+                "timeout_sec": 300,
+                "tool_timeout_sec": None,
+            },
+            "schema_version": "0.1.0",
         }
 
     def test_valid_attempt_record(self):
@@ -284,9 +291,9 @@ class TestAttemptRecordSchema:
         assert record.result.failure_reason is None
 
     def test_failure_reason_can_be_string(self):
-        """TaskResult.failure_reason should accept a string."""
+        """TaskResult.failure_reason should accept a FailureReason enum string."""
         data = self._make_valid_attempt_record()
-        data["result"]["failure_reason"] = "setup_failed"
+        data["result"]["failure_reason"] = "SETUP_FAILED"
 
         record = AttemptRecord(**data)
-        assert record.result.failure_reason == "setup_failed"
+        assert record.result.failure_reason == "SETUP_FAILED"
