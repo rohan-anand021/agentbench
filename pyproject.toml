@@ -35,8 +35,15 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
-ignore = ["E501"]
+select = ["E", "F", "W"] # Removed "I" (import sorting) - often annoying
+ignore = [
+    "E501", # Line too long
+    "F401", # Unused import (useful during development)
+    "F841", # Unused variable (useful during development)
+    "E402", # Module level import not at top of file
+    "E741", # Ambiguous variable name (l, O, I)
+    "W293", # Blank line contains whitespace
+]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
