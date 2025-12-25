@@ -1,152 +1,177 @@
-"""Unit tests for LLM message types.
+"""Unit tests for LLM message types (Responses API format).
 
 Tests cover:
-1. Message serialization
-2. ToolCall arguments validation
+1. Message serialization (InputMessage, OutputMessage)
+2. ToolCall/FunctionCall arguments validation
 3. LLMResponse.has_tool_calls property
 4. LLMResponse round-trip serialization
-5. TokenUsage totals
+5. TokenUsage fields
 """
 
+import json
 import pytest
 from datetime import datetime, timezone
 
 from agentbench.llm.messages import (
     MessageRole,
-    Message,
+    InputTextContent,
+    OutputTextContent,
+    InputMessage,
+    OutputMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    OutputFunctionCall,
     ToolDefinition,
-    ToolCall,
     TokenUsage,
+    InputTokensDetails,
+    OutputTokensDetails,
     LLMResponse,
 )
 
 
-class TestMessageSerialization:
-    """Tests for Message serialization."""
+class TestInputMessageSerialization:
+    """Tests for InputMessage serialization."""
 
-    def test_message_serialization(self) -> None:
-        """Message.model_dump(mode='json') works correctly."""
-        message = Message(
+    def test_input_message_serialization(self) -> None:
+        """InputMessage.model_dump(mode='json') works correctly."""
+        message = InputMessage(
             role=MessageRole.USER,
-            content="Hello, how are you?",
-            name=None,
-            tool_call_id=None,
+            content=[InputTextContent(text="Hello, how are you?")]
         )
 
         serialized = message.model_dump(mode="json")
 
+        assert serialized["type"] == "message"
         assert serialized["role"] == "user"
-        assert serialized["content"] == "Hello, how are you?"
-        assert serialized["name"] is None
-        assert serialized["tool_call_id"] is None
+        assert serialized["content"][0]["type"] == "input_text"
+        assert serialized["content"][0]["text"] == "Hello, how are you?"
 
-    def test_message_with_tool_info_serialization(self) -> None:
-        """Message with tool information serializes correctly."""
-        message = Message(
-            role=MessageRole.TOOL,
-            content="Tool result here",
-            name="search",
-            tool_call_id="call_123",
+    def test_input_message_with_string_content(self) -> None:
+        """InputMessage can accept string content."""
+        message = InputMessage(
+            role=MessageRole.USER,
+            content="Simple string content"
         )
 
-        serialized = message.model_dump(mode="json")
-
-        assert serialized["role"] == "tool"
-        assert serialized["name"] == "search"
-        assert serialized["tool_call_id"] == "call_123"
+        assert message.content == "Simple string content"
 
     def test_all_message_roles(self) -> None:
         """All MessageRole values can be used."""
-        roles = [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM, MessageRole.TOOL]
-        
+        roles = [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM]
+
         for role in roles:
-            message = Message(role=role, content="test")
+            message = InputMessage(
+                role=role,
+                content=[InputTextContent(text="test")]
+            )
             assert message.role == role
 
 
-class TestToolCallArguments:
-    """Tests for ToolCall arguments validation."""
+class TestFunctionCallTypes:
+    """Tests for FunctionCall and FunctionCallOutput."""
 
-    def test_tool_call_arguments_are_dict(self) -> None:
-        """ToolCall.arguments validates as dict."""
-        tool_call = ToolCall(
-            id="call_abc123",
-            name="read_file",
-            arguments={"path": "/src/main.py", "encoding": "utf-8"},
+    def test_function_call_serialization(self) -> None:
+        """FunctionCall serializes correctly for conversation history."""
+        fc = FunctionCall(
+            id="fc_123",
+            call_id="call_abc",
+            name="get_weather",
+            arguments=json.dumps({"location": "San Francisco, CA"})
         )
 
-        assert isinstance(tool_call.arguments, dict)
-        assert tool_call.arguments["path"] == "/src/main.py"
-        assert tool_call.arguments["encoding"] == "utf-8"
+        serialized = fc.model_dump(mode="json")
 
-    def test_tool_call_empty_arguments(self) -> None:
-        """ToolCall accepts empty dict for arguments."""
-        tool_call = ToolCall(
-            id="call_xyz",
-            name="list_files",
-            arguments={},
+        assert serialized["type"] == "function_call"
+        assert serialized["id"] == "fc_123"
+        assert serialized["call_id"] == "call_abc"
+        assert serialized["name"] == "get_weather"
+        assert json.loads(serialized["arguments"]) == {"location": "San Francisco, CA"}
+
+    def test_function_call_output_serialization(self) -> None:
+        """FunctionCallOutput serializes correctly."""
+        fco = FunctionCallOutput(
+            id="fco_123",
+            call_id="call_abc",
+            output=json.dumps({"temperature": "72°F", "condition": "Sunny"})
         )
 
-        assert tool_call.arguments == {}
+        serialized = fco.model_dump(mode="json")
 
-    def test_tool_call_nested_arguments(self) -> None:
-        """ToolCall arguments can contain nested structures."""
-        tool_call = ToolCall(
-            id="call_nested",
-            name="complex_tool",
-            arguments={
-                "options": {"verbose": True, "limit": 100},
-                "filters": ["*.py", "*.txt"],
-            },
+        assert serialized["type"] == "function_call_output"
+        assert serialized["call_id"] == "call_abc"
+
+
+class TestOutputTypes:
+    """Tests for OutputMessage and OutputFunctionCall."""
+
+    def test_output_message_serialization(self) -> None:
+        """OutputMessage serializes correctly."""
+        msg = OutputMessage(
+            id="msg_123",
+            status="completed",
+            content=[OutputTextContent(text="Hello! How can I help?")]
         )
 
-        assert tool_call.arguments["options"]["verbose"] is True
-        assert len(tool_call.arguments["filters"]) == 2
+        serialized = msg.model_dump(mode="json")
+
+        assert serialized["type"] == "message"
+        assert serialized["role"] == "assistant"
+        assert serialized["status"] == "completed"
+        assert serialized["content"][0]["type"] == "output_text"
+        assert serialized["content"][0]["text"] == "Hello! How can I help?"
+
+    def test_output_function_call_serialization(self) -> None:
+        """OutputFunctionCall serializes correctly."""
+        fc = OutputFunctionCall(
+            id="fc_456",
+            call_id="call_xyz",
+            name="search",
+            arguments=json.dumps({"query": "python"})
+        )
+
+        serialized = fc.model_dump(mode="json")
+
+        assert serialized["type"] == "function_call"
+        assert serialized["call_id"] == "call_xyz"
+        assert serialized["name"] == "search"
 
 
 class TestLLMResponseHasToolCalls:
     """Tests for LLMResponse.has_tool_calls property."""
 
     def test_llm_response_has_tool_calls_true(self) -> None:
-        """has_tool_calls returns True when tool_calls is non-empty list."""
+        """has_tool_calls returns True when output contains function_call."""
         response = LLMResponse(
-            request_id="req_123",
-            content=None,
-            tool_calls=[
-                ToolCall(id="call_1", name="search", arguments={"query": "test"})
+            id="resp_123",
+            created_at=1704067200,
+            model="openai/gpt-4",
+            status="completed",
+            output=[
+                OutputFunctionCall(
+                    id="fc_1",
+                    call_id="call_1",
+                    name="search",
+                    arguments='{"query": "test"}'
+                )
             ],
-            finish_reason="tool_calls",
-            usage=None,
-            latency_ms=150,
-            timestamp=datetime.now(timezone.utc),
         )
 
         assert response.has_tool_calls is True
 
-    def test_llm_response_has_tool_calls_false_none(self) -> None:
-        """has_tool_calls returns False when tool_calls is None."""
+    def test_llm_response_has_tool_calls_false(self) -> None:
+        """has_tool_calls returns False when output only has messages."""
         response = LLMResponse(
-            request_id="req_456",
-            content="Hello there!",
-            tool_calls=None,
-            finish_reason="stop",
-            usage=None,
-            latency_ms=100,
-            timestamp=datetime.now(timezone.utc),
-        )
-
-        assert response.has_tool_calls is False
-
-    def test_llm_response_has_tool_calls_false_empty(self) -> None:
-        """has_tool_calls returns False when tool_calls is empty list."""
-        response = LLMResponse(
-            request_id="req_789",
-            content="Response with empty tools",
-            tool_calls=[],
-            finish_reason="stop",
-            usage=None,
-            latency_ms=120,
-            timestamp=datetime.now(timezone.utc),
+            id="resp_456",
+            created_at=1704067200,
+            model="openai/gpt-4",
+            status="completed",
+            output=[
+                OutputMessage(
+                    id="msg_1",
+                    status="completed",
+                    content=[OutputTextContent(text="Hello there!")]
+                )
+            ],
         )
 
         assert response.has_tool_calls is False
@@ -158,97 +183,99 @@ class TestLLMResponseSerialization:
     def test_llm_response_serialization(self) -> None:
         """LLMResponse can round-trip through JSON serialization."""
         original = LLMResponse(
-            request_id="req_roundtrip",
-            content="Test response content",
-            tool_calls=None,
-            finish_reason="stop",
+            id="resp_roundtrip",
+            created_at=1704067200,
+            model="anthropic/claude-3.5-sonnet",
+            status="completed",
+            output=[
+                OutputMessage(
+                    id="msg_1",
+                    status="completed",
+                    content=[OutputTextContent(text="Test response")]
+                )
+            ],
             usage=TokenUsage(
-                prompt_tokens=50,
-                completion_tokens=25,
+                input_tokens=50,
+                output_tokens=25,
                 total_tokens=75,
             ),
             latency_ms=200,
-            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc),
         )
 
-        # Serialize to JSON
         json_dict = original.model_dump(mode="json")
-
-        # Deserialize back
         restored = LLMResponse.model_validate(json_dict)
 
-        assert restored.request_id == original.request_id
-        assert restored.content == original.content
-        assert restored.finish_reason == original.finish_reason
+        assert restored.id == original.id
+        assert restored.model == original.model
+        assert restored.status == original.status
         assert restored.latency_ms == original.latency_ms
-        assert restored.usage is not None
-        assert restored.usage.prompt_tokens == 50
 
-    def test_llm_response_with_tool_calls_roundtrip(self) -> None:
-        """LLMResponse with tool_calls can round-trip through JSON."""
-        original = LLMResponse(
-            request_id="req_tools",
-            content=None,
-            tool_calls=[
-                ToolCall(id="call_a", name="read_file", arguments={"path": "/test.py"}),
-                ToolCall(id="call_b", name="search", arguments={"query": "def main"}),
+    def test_llm_response_text_content_property(self) -> None:
+        """text_content property extracts text from first message."""
+        response = LLMResponse(
+            id="resp_text",
+            created_at=1704067200,
+            model="openai/gpt-4",
+            status="completed",
+            output=[
+                OutputMessage(
+                    id="msg_1",
+                    status="completed",
+                    content=[OutputTextContent(text="This is the response text")]
+                )
             ],
-            finish_reason="tool_calls",
-            usage=None,
-            latency_ms=300,
-            timestamp=datetime.now(timezone.utc),
         )
 
-        json_dict = original.model_dump(mode="json")
-        restored = LLMResponse.model_validate(json_dict)
-
-        assert restored.tool_calls is not None
-        assert len(restored.tool_calls) == 2
-        assert restored.tool_calls[0].name == "read_file"
-        assert restored.tool_calls[1].name == "search"
+        assert response.text_content == "This is the response text"
 
 
-class TestTokenUsageTotals:
-    """Tests for TokenUsage totals validation."""
+class TestTokenUsage:
+    """Tests for TokenUsage with Responses API fields."""
 
-    def test_token_usage_totals(self) -> None:
-        """Total tokens equals prompt + completion tokens."""
+    def test_token_usage_fields(self) -> None:
+        """TokenUsage uses Responses API field names."""
         usage = TokenUsage(
-            prompt_tokens=100,
-            completion_tokens=50,
+            input_tokens=100,
+            output_tokens=50,
             total_tokens=150,
         )
 
-        assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+        assert usage.total_tokens == 150
 
-    def test_token_usage_with_cached(self) -> None:
-        """TokenUsage with cached_tokens works correctly."""
+    def test_token_usage_with_details(self) -> None:
+        """TokenUsage with nested details objects."""
         usage = TokenUsage(
-            prompt_tokens=200,
-            completion_tokens=100,
+            input_tokens=200,
+            output_tokens=100,
             total_tokens=300,
-            cached_tokens=50,
+            input_tokens_details=InputTokensDetails(cached_tokens=50),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=20),
         )
 
-        assert usage.cached_tokens == 50
-        assert usage.total_tokens == 300
+        assert usage.input_tokens_details is not None
+        assert usage.input_tokens_details.cached_tokens == 50
+        assert usage.output_tokens_details is not None
+        assert usage.output_tokens_details.reasoning_tokens == 20
 
-    def test_token_usage_cached_optional(self) -> None:
-        """cached_tokens is optional and defaults to None."""
+    def test_token_usage_details_optional(self) -> None:
+        """Token details are optional and default to None."""
         usage = TokenUsage(
-            prompt_tokens=50,
-            completion_tokens=25,
+            input_tokens=50,
+            output_tokens=25,
             total_tokens=75,
         )
 
-        assert usage.cached_tokens is None
+        assert usage.input_tokens_details is None
+        assert usage.output_tokens_details is None
 
 
 class TestToolDefinition:
     """Tests for ToolDefinition model."""
 
     def test_tool_definition_serialization(self) -> None:
-        """ToolDefinition serializes correctly."""
+        """ToolDefinition serializes correctly for Responses API."""
         tool_def = ToolDefinition(
             name="read_file",
             description="Read the contents of a file",
@@ -263,6 +290,7 @@ class TestToolDefinition:
 
         serialized = tool_def.model_dump(mode="json")
 
+        assert serialized["type"] == "function"
         assert serialized["name"] == "read_file"
         assert serialized["description"] == "Read the contents of a file"
         assert "properties" in serialized["parameters"]

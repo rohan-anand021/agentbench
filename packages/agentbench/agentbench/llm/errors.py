@@ -83,6 +83,46 @@ class ContextLengthError(LLMError):
                 "tokens_used": tokens_used
             }
         )
-        
+class InvalidRequestError(LLMError):
+    """Error for malformed or invalid requests (HTTP 400)."""
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None
+    ):
+        super().__init__(
+            LLMErrorType.INVALID_REQUEST,
+            message,
+            retryable=False,
+            details=details or {}
+        )
 
-    
+
+class ProviderError(LLMError):
+    """Error for provider-side issues (HTTP 5xx)."""
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None
+    ):
+        super().__init__(
+            LLMErrorType.PROVIDER_ERROR,
+            message,
+            retryable=True,
+            details={
+                "status_code": status_code
+            }
+        )
+
+
+class ContentFilterError(LLMError):
+    """Error when content is blocked by safety filters."""
+    def __init__(
+        self,
+        message: str,
+    ):
+        super().__init__(
+            LLMErrorType.CONTENT_FILTER,
+            message,
+            retryable=False,
+        )

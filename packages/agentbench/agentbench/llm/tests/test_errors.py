@@ -2,10 +2,11 @@
 
 Tests cover:
 1. LLMError base class behavior
-2. RateLimitError is retryable
+2. RateLimitedError is retryable
 3. AuthenticationError is not retryable
 4. Error to FailureReason mapping
 5. Error details capture
+6. New error types: InvalidRequestError, ProviderError, ContentFilterError
 """
 
 import pytest
@@ -17,6 +18,9 @@ from agentbench.llm.errors import (
     AuthenticationError,
     TimeoutError,
     ContextLengthError,
+    InvalidRequestError,
+    ProviderError,
+    ContentFilterError,
 )
 from agentbench.scoring.taxonomy import FailureReason
 
@@ -108,6 +112,9 @@ class TestErrorToFailureReason:
             AuthenticationError("Auth failed"),
             TimeoutError("Timeout"),
             ContextLengthError("Context too long"),
+            InvalidRequestError("Invalid request"),
+            ProviderError("Provider error"),
+            ContentFilterError("Content blocked"),
         ]
 
         for error in errors:
@@ -152,6 +159,61 @@ class TestTimeoutError:
 
         assert error.retryable is True
         assert error.error_type == LLMErrorType.TIMEOUT
+
+
+class TestInvalidRequestError:
+    """Tests for InvalidRequestError (HTTP 400)."""
+
+    def test_invalid_request_not_retryable(self) -> None:
+        """InvalidRequestError is not retryable."""
+        error = InvalidRequestError(message="Malformed JSON in request body")
+
+        assert error.retryable is False
+        assert error.error_type == LLMErrorType.INVALID_REQUEST
+
+    def test_invalid_request_with_details(self) -> None:
+        """InvalidRequestError can capture extra details."""
+        error = InvalidRequestError(
+            message="Invalid model name",
+            details={"model": "nonexistent/model"}
+        )
+
+        assert error.details["model"] == "nonexistent/model"
+
+
+class TestProviderError:
+    """Tests for ProviderError (HTTP 5xx)."""
+
+    def test_provider_error_is_retryable(self) -> None:
+        """ProviderError is retryable."""
+        error = ProviderError(
+            message="Internal server error",
+            status_code=500
+        )
+
+        assert error.retryable is True
+        assert error.error_type == LLMErrorType.PROVIDER_ERROR
+        assert error.details["status_code"] == 500
+
+    def test_provider_error_various_codes(self) -> None:
+        """ProviderError captures various status codes."""
+        for code in [500, 502, 503]:
+            error = ProviderError(
+                message=f"Server error {code}",
+                status_code=code
+            )
+            assert error.details["status_code"] == code
+
+
+class TestContentFilterError:
+    """Tests for ContentFilterError."""
+
+    def test_content_filter_not_retryable(self) -> None:
+        """ContentFilterError is not retryable."""
+        error = ContentFilterError(message="Content blocked by safety filter")
+
+        assert error.retryable is False
+        assert error.error_type == LLMErrorType.CONTENT_FILTER
 
 
 class TestAllErrorTypes:
