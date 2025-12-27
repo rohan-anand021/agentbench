@@ -213,7 +213,7 @@ class TestSettingsFromEnv:
         settings = AgentBenchSettings()
 
         assert settings.openrouter_api_key is None
-        assert settings.default_model == "anthropic/claude-3.5-sonnet"
+        assert settings.default_model == "mistralai/devstral-2512:free"
         assert settings.default_provider == LLMProvider.OPENROUTER
 
 

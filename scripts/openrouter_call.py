@@ -10,6 +10,7 @@ load_dotenv()
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/responses"
 
 llm_provider = LLMProvider.OPENROUTER
+
 provider_config = ProviderConfig(
     provider = llm_provider,
     model_name = "mistralai/devstral-2512:free",

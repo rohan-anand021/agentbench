@@ -34,17 +34,6 @@ class LLMClient(ABC):
         """
         pass
 
-    @abstractmethod
-    def count_tokens(
-        self,
-        input_items: list[InputItem]
-    ) -> int:
-        """Estimate token count for input items.
-        
-        Used for context window management.
-        """
-        pass
-
     @property
     def model_name(self) -> str:
         return self.config.provider_config.model_name
