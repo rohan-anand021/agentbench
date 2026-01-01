@@ -1,8 +1,7 @@
-"""Sandbox utilities - re-exported from shared package."""
+"""Sandbox utilities for running commands safely."""
 
-from shared.sandbox import (
-    DockerRunResult,
-    DockerSandbox,
+from .docker_sandbox import DockerRunResult, DockerSandbox
+from .filesystem import (
     PathEscapeError,
     SymLinkError,
     resolve_safe_path,
@@ -17,4 +16,3 @@ __all__ = [
     "resolve_safe_path",
     "safe_glob",
 ]
-
