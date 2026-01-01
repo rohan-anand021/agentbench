@@ -7,6 +7,7 @@ from agentbench.llm.messages import (
     LLMResponse,
 )
 from agentbench.llm.errors import AuthenticationError, LLMError, LLMErrorType, TimeoutError
+from agentbench.util.events import EventLogger, NullEventLogger, NULL_EVENT_LOGGER
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/responses"
 
@@ -49,16 +50,14 @@ class OpenRouterClient(LLMClient):
     ) -> dict:
         body = {
             "model": self.model_name,
-            "input": [item.model_dump(
-                mode = "json") for item in input_items],
+            "input": [item.model_dump(mode="json") for item in input_items],
             "max_output_tokens": self.config.sampling.max_tokens,
             "temperature": self.config.sampling.temperature,
             "top_p": self.config.sampling.top_p,
         }
 
         if tools:
-            body["tools"] = [tool.model_dump(
-                mode = "json") for tool in tools]
+            body["tools"] = [tool.model_dump(mode="json") for tool in tools]
             body["tool_choice"] = "auto"
         
         return body
@@ -138,14 +137,23 @@ class OpenRouterClient(LLMClient):
 
         message = response_body.get("error", {}).get("message", f"HTTP {status_code}") if response_body else f"HTTP {status_code}"
 
-        return LLMError(error_type, message, retryable = retryable)
+        return LLMError(error_type, message, retryable=retryable)
 
     async def complete(
         self,
         input_items: list[InputItem],
-        tools: list[ToolDefinition] | None = None
+        tools: list[ToolDefinition] | None = None,
+        event_logger: EventLogger | NullEventLogger | None = None
     ) -> LLMResponse:
+        logger = event_logger or NULL_EVENT_LOGGER
         client = await self._get_client()
+
+        logger.log_llm_request_started(
+            model=self.model_name,
+            message_count=len(input_items),
+            has_tools=tools is not None
+        )
+
         try:
             response = await client.post(
                 OPENROUTER_API_URL,
@@ -155,13 +163,44 @@ class OpenRouterClient(LLMClient):
             if response.status_code != 200:
                 raise self._classify_error(response.status_code, response.json())
 
-            return LLMResponse.model_validate(response.json())
+            result = LLMResponse.model_validate(response.json())
+
+            logger.log_llm_request_finished(
+                request_id=result.id or "",
+                status=result.status or "",
+                latency_ms=result.latency_ms or 0,
+                tokens_used=result.usage.total_tokens if result.usage else 0,
+                has_tool_calls=result.has_tool_calls
+            )
+
+            return result
         
         except httpx.TimeoutException as e:
+            logger.log_llm_request_failed(
+                error_type=LLMErrorType.TIMEOUT.value,
+                message=str(e),
+                retryable=True
+            )
             raise TimeoutError(f"Request timed out after {self.config.provider_config.timeout_sec} seconds") from e
         except httpx.HTTPStatusError as e:
-            raise self._classify_error(e.response.status_code, e.response.json()) from e
+            error = self._classify_error(e.response.status_code, e.response.json())
+            logger.log_llm_request_failed(
+                error_type=error.error_type.value,
+                message=str(error),
+                retryable=error.retryable
+            )
+            raise error from e
         except httpx.RequestError as e:
+            logger.log_llm_request_failed(
+                error_type=LLMErrorType.NETWORK_ERROR.value,
+                message=str(e),
+                retryable=True
+            )
             raise LLMError(LLMErrorType.NETWORK_ERROR, str(e), retryable=True) from e
         except Exception as e:
+            logger.log_llm_request_failed(
+                error_type=LLMErrorType.PROVIDER_ERROR.value,
+                message=str(e),
+                retryable=False
+            )
             raise LLMError(LLMErrorType.PROVIDER_ERROR, str(e)) from e

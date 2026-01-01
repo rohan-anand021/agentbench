@@ -185,7 +185,6 @@ def list_tasks_cmd(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from None
 
-
 @app.callback()
 def main():
     """

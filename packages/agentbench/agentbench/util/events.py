@@ -92,7 +92,6 @@ class EventLogger:
         stdout_path: str | None = None,
         stderr_path: str | None = None,
     ) -> None:
-        """Log when test execution completes."""
         self.log(
             event_type=EventType.TESTS_FINISHED,
             payload={
@@ -102,3 +101,68 @@ class EventLogger:
                 "stderr_path": stderr_path,
             },
         )
+
+    def log_llm_request_started(
+        self,
+        model: str,
+        message_count: int,
+        has_tools: bool,
+    ) -> None:
+        self.log(
+            event_type=EventType.LLM_REQUEST_STARTED,
+            payload={
+                "model": model,
+                "message_count": message_count,
+                "has_tools": has_tools,
+            },
+        )
+
+    def log_llm_request_finished(
+        self,
+        request_id: str,
+        status: str,
+        latency_ms: int,
+        tokens_used: int,
+        has_tool_calls: bool,
+    ) -> None:
+        self.log(
+            event_type=EventType.LLM_REQUEST_FINISHED,
+            payload={
+                "request_id": request_id,
+                "status": status,
+                "latency_ms": latency_ms,
+                "tokens_used": tokens_used,
+                "has_tool_calls": has_tool_calls,
+            },
+        )
+
+    def log_llm_request_failed(
+        self,
+        error_type: str,
+        message: str,
+        retryable: bool,
+    ) -> None:
+        self.log(
+            event_type=EventType.LLM_REQUEST_FAILED,
+            payload={
+                "error_type": error_type,
+                "message": message,
+                "retryable": retryable,
+            },
+        )
+
+
+class NullEventLogger:
+    def log_tool_started(self, request) -> None: pass
+    def log_tool_finished(self, result) -> None: pass
+    def log_agent_turn_started(self) -> None: pass
+    def log_agent_turn_finished(self, stopped_reason: str) -> None: pass
+    def log_patch_applied(self, step_id: int, changed_files: list[str], patch_artifact_path: str) -> None: pass
+    def log_tests_started(self, command: str) -> None: pass
+    def log_tests_finished(self, exit_code: int, passed: bool, stdout_path: str | None = None, stderr_path: str | None = None) -> None: pass
+    def log_llm_request_started(self, model: str, message_count: int, has_tools: bool) -> None: pass
+    def log_llm_request_finished(self, request_id: str, status: str, latency_ms: int, tokens_used: int, has_tool_calls: bool) -> None: pass
+    def log_llm_request_failed(self, error_type: str, message: str, retryable: bool) -> None: pass
+
+
+NULL_EVENT_LOGGER = NullEventLogger()
