@@ -200,6 +200,7 @@ class TestAttemptRecordSchema:
                 "timeout_sec": 300,
                 "tool_timeout_sec": None,
             },
+            "record_version": "0.1.0",
             "schema_version": "0.1.0",
         }
 
@@ -214,6 +215,7 @@ class TestAttemptRecordSchema:
         assert record.duration_sec == 60.0
         assert record.baseline_validation.attempted is True
         assert record.result.passed is True
+        assert record.record_version == data["record_version"]
 
     def test_timestamp_info_parsing(self):
         """TimestampInfo should correctly parse datetime strings."""

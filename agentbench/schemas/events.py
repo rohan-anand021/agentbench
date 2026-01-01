@@ -21,6 +21,7 @@ class EventType(StrEnum):
 
 
 class Event(BaseModel):
+    event_version: str = "1.0"
     event_type: EventType
     timestamp: datetime
     run_id: str

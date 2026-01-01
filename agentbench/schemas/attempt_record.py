@@ -21,7 +21,7 @@ Versioning Strategy:
 from datetime import datetime
 
 from agentbench.scoring import FailureReason
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class TimestampInfo(BaseModel):
@@ -120,4 +120,19 @@ class AttemptRecord(BaseModel):
     variant: str
     model: ModelConfig | None
     limits: LimitsConfig
+    record_version: str
     schema_version: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_versions(cls, data):
+        if isinstance(data, dict):
+            schema_version = data.get("schema_version")
+            record_version = data.get("record_version")
+            if schema_version and record_version and schema_version != record_version:
+                raise ValueError("schema_version and record_version must match")
+            if schema_version and not record_version:
+                data["record_version"] = schema_version
+            if record_version and not schema_version:
+                data["schema_version"] = record_version
+        return data

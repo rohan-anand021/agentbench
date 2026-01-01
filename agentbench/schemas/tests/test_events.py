@@ -52,6 +52,7 @@ class TestEventCreation:
         )
 
         assert event.event_type == EventType.TOOL_CALL_STARTED
+        assert event.event_version == "1.0"
         assert event.run_id == "run_001"
         assert event.step_id == 1
         assert "tool_name" in event.payload
@@ -136,6 +137,7 @@ class TestEventSerialization:
         restored = Event.model_validate(json_data)
 
         assert restored.event_type == original.event_type
+        assert restored.event_version == original.event_version
         assert restored.run_id == original.run_id
         assert restored.step_id == original.step_id
         assert restored.payload == original.payload
