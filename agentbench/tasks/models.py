@@ -8,6 +8,7 @@ from agentbench.scoring import FailureReason
 class RepoSpec(BaseModel):
     model_config = ConfigDict(
         ser_json_timedelta="float",
+        extra="forbid",
     )
 
     url: str
@@ -15,19 +16,49 @@ class RepoSpec(BaseModel):
 
 
 class EnvironmentSpec(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
     docker_image: str
     workdir: str
     timeout_sec: int
 
 
 class SetupSpec(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
     commands: list[str]
 
 
 class RunSpec(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
     command: str
 
+
+class ValidationSpec(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    expected_exit_codes: list[int] | None = None
+    expected_failure_regex: str | None = None
+    expected_stdout_regex: str | None = None
+    expected_stderr_regex: str | None = None
+    disallowed_failure_regex: list[str] | None = None
+    expected_failing_tests: list[str] | None = None
+
+
 class AgentSpec(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
     entrypoint: str
     max_steps: int
 
@@ -35,14 +66,19 @@ class AgentSpec(BaseModel):
 class TaskSpec(BaseModel):
     model_config = ConfigDict(
         ser_json_timedelta="float",
+        extra="forbid",
     )
 
+    task_spec_version: str
     id: str
     suite: str
     repo: RepoSpec
     environment: EnvironmentSpec
     setup: SetupSpec
     run: RunSpec
+    validation: ValidationSpec | None = None
+    harness_min_version: str | None = None
+    labels: list[str] | None = None
     source_path: Path
     agent: AgentSpec | None = None
 

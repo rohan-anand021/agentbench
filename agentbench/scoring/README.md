@@ -15,7 +15,10 @@ The `FailureReason` enum only contains failure states.
 |------|-------------|---------------|
 | `SETUP_FAILED` | Setup command failed | Missing dependency, broken pip install |
 | `SETUP_TIMEOUT` | Setup exceeded timeout | Slow network, large dependencies |
+| `SETUP_DIRTY_WORKTREE` | Setup modified tracked files | Setup changed repo state |
 | `BASELINE_NOT_FAILING` | Tests pass before fix | Invalid task (already fixed) |
+| `BASELINE_MISMATCH` | Baseline failure didn't match expectations | Unexpected exit/test signature |
+| `BASELINE_FLAKY` | Baseline failure is inconsistent | Baseline rerun differs |
 | `TIMEOUT` | Run command exceeded timeout | Infinite loop, slow tests |
 | `SANDBOX_ERROR` | Docker/container failure | Docker daemon down, OOM |
 | `GIT_CLONE_FAILED` | Could not clone repo | Bad URL, network failure |
@@ -41,17 +44,20 @@ When multiple failures could apply, the one with lower precedence number is repo
 | 2 | `GIT_CHECKOUT_FAILED` | Can't get correct version |
 | 3 | `SETUP_TIMEOUT` | Setup never completed |
 | 4 | `SETUP_FAILED` | Dependencies broken |
-| 5 | `BASELINE_NOT_FAILING` | Task is invalid |
-| 6 | `SANDBOX_ERROR` | Execution environment broken |
-| 7 | `LLM_ERROR` | Can't get agent responses |
-| 8 | `TOOL_ERROR` | Agent's tool calls fail |
-| 9 | `TIMEOUT` | Ran out of time |
-| 10 | `AGENT_GAVE_UP` | Budget exhausted |
-| 11 | `TESTS_FAILED` | Agent tried but didn't fix |
-| 12 | `NO_TESTS_COLLECTED` | Testing infrastructure issue |
-| 13 | `INTERNAL_ERROR` | pytest internal failure |
-| 14 | `INTERRUPTED` | User cancellation |
-| 15 | `UNKNOWN` | Catch-all |
+| 5 | `SETUP_DIRTY_WORKTREE` | Setup modified tracked files |
+| 6 | `BASELINE_NOT_FAILING` | Task is invalid |
+| 7 | `BASELINE_MISMATCH` | Baseline expectations not met |
+| 8 | `BASELINE_FLAKY` | Baseline is inconsistent |
+| 9 | `SANDBOX_ERROR` | Execution environment broken |
+| 10 | `LLM_ERROR` | Can't get agent responses |
+| 11 | `TOOL_ERROR` | Agent's tool calls fail |
+| 12 | `TIMEOUT` | Ran out of time |
+| 13 | `AGENT_GAVE_UP` | Budget exhausted |
+| 14 | `TESTS_FAILED` | Agent tried but didn't fix |
+| 15 | `NO_TESTS_COLLECTED` | Testing infrastructure issue |
+| 16 | `INTERNAL_ERROR` | pytest internal failure |
+| 17 | `INTERRUPTED` | User cancellation |
+| 18 | `UNKNOWN` | Catch-all |
 
 ---
 

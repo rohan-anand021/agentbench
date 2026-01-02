@@ -7,9 +7,9 @@ from pathlib import Path
 
 import ulid
 
-from agentbench.sandbox.docker_sandbox import DockerSandbox
+from agentbench.sandbox.docker_sandbox import DockerRunResult, DockerSandbox
 from agentbench.tasks.loader import load_task
-from agentbench.util.git import checkout_commit, clone_repo
+from agentbench.util.git import checkout_commit, clone_repo, diff_stat
 from agentbench.util.paths import ensure_dir
 from agentbench.util.process import check_exit_code
 
@@ -88,18 +88,35 @@ def run_task(
 
     setup_commands = " && ".join(task.setup.commands)
     repo_relative_path = "repo"
-    setup_commands = f"cd {repo_relative_path} && {setup_commands}"
+    setup_stdout_path = Path(logs_dir, "setup_stdout.txt")
+    setup_stderr_path = Path(logs_dir, "setup_stderr.txt")
 
-    logger.info("Running setup commands")
-    logger.debug("Setup commands: %s", setup_commands)
-    setup_run_result = sandbox.run(
-        workspace_host_path=workspace_dir,
-        command=setup_commands,
-        network="bridge",
-        timeout_sec=task.environment.timeout_sec,
-        stdout_path=Path(logs_dir, "setup_stdout.txt"),
-        stderr_path=Path(logs_dir, "setup_stderr.txt"),
-    )
+    if setup_commands.strip():
+        setup_commands = f"cd {repo_relative_path} && {setup_commands}"
+        logger.info("Running setup commands")
+        logger.debug("Setup commands: %s", setup_commands)
+        setup_run_result = sandbox.run(
+            workspace_host_path=workspace_dir,
+            command=setup_commands,
+            network="bridge",
+            timeout_sec=task.environment.timeout_sec,
+            stdout_path=setup_stdout_path,
+            stderr_path=setup_stderr_path,
+        )
+    else:
+        logger.info("No setup commands provided; skipping setup")
+        setup_stdout_path.write_text(
+            "Setup skipped: no commands provided.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        setup_stderr_path.write_text("", encoding="utf-8", newline="\n")
+        setup_run_result = DockerRunResult(
+            exit_code=0,
+            stdout_path=setup_stdout_path,
+            stderr_path=setup_stderr_path,
+            docker_cmd=[],
+        )
 
     if setup_run_result.exit_code != 0:
         logger.error(
@@ -108,6 +125,39 @@ def run_task(
         raise ValueError("Setup run failed, please try again")
 
     logger.debug("Setup completed successfully")
+
+    logger.info("Recording post-setup git diff --stat")
+    diff_stdout_path, diff_stderr_path, diff_exit_code = diff_stat(
+        repo_dir=repo_dir, logs_dir=logs_dir
+    )
+    if diff_exit_code != 0:
+        logger.warning(
+            "Post-setup git diff --stat failed with exit code %d",
+            diff_exit_code,
+        )
+
+    logger.info("Capturing post-setup environment info")
+    env_capture_cmd = (
+        "uname -a || true; "
+        "python -VV || true; "
+        "pip --version || true; "
+        "pytest --version || true"
+    )
+    env_stdout_path = Path(logs_dir, "post_setup_env_stdout.txt")
+    env_stderr_path = Path(logs_dir, "post_setup_env_stderr.txt")
+    env_run_result = sandbox.run(
+        workspace_host_path=workspace_dir,
+        command=env_capture_cmd,
+        network="none",
+        timeout_sec=min(task.environment.timeout_sec, 60),
+        stdout_path=env_stdout_path,
+        stderr_path=env_stderr_path,
+    )
+    if env_run_result.exit_code != 0:
+        logger.warning(
+            "Post-setup environment capture failed with exit code %d",
+            env_run_result.exit_code,
+        )
 
     run_cmd = task.run.command
     run_cmd = f"cd repo && {run_cmd}"
@@ -167,6 +217,22 @@ def run_task(
         "exit_codes": {
             "Setup exit code": str(setup_run_result.exit_code),
             "Run exit code": str(run_run_result.exit_code),
+        },
+        "post_setup_diff_stat": {
+            "stdout_path": str(diff_stdout_path),
+            "stderr_path": str(diff_stderr_path),
+            "exit_code": str(diff_exit_code),
+        },
+        "post_setup_environment": {
+            "command": env_capture_cmd,
+            "stdout_path": str(env_stdout_path),
+            "stderr_path": str(env_stderr_path),
+            "exit_code": str(env_run_result.exit_code),
+        },
+        "docker_run_args": {
+            "setup": setup_run_result.docker_cmd,
+            "post_setup_environment": env_run_result.docker_cmd,
+            "run": run_run_result.docker_cmd,
         },
         "paths_to_logs": str(logs_dir),
     }

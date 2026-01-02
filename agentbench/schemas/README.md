@@ -33,13 +33,16 @@ Readers should check `schema_version` and handle unknown versions gracefully.
 | `run_id` | str | Yes | Always | `"01JFD..."` |
 | `task_id` | str | Yes | Always | `"toy_fail_pytest"` |
 | `suite` | str | Yes | Always | `"custom-dev"` |
+| `task_spec_version` | str | Yes | Always | `"1.0"` |
+| `harness_min_version` | str \| null | No | When provided in task spec | `"0.1.0"` |
+| `labels` | list[str] \| null | No | When provided in task spec | `["toy"]` |
 | `variant` | str | Yes | Always | `"baseline"` |
 | `model` | ModelConfig \| null | No | When agent runs | `null` for baseline |
 | `timestamps.started_at` | datetime | Yes | Always | `"2025-12-17T10:00:00-05:00"` |
 | `timestamps.ended_at` | datetime | Yes | Always | `"2025-12-17T10:02:30-05:00"` |
 | `duration_sec` | float | Yes | Always | `150.5` |
 | `baseline_validation.attempted` | bool | Yes | Always | `true` |
-| `baseline_validation.failure_as_expected` | bool | Yes | Always | `true` |
+| `baseline_validation.failed_as_expected` | bool | Yes | Always | `true` |
 | `baseline_validation.exit_code` | int | Yes | Always | `1` |
 | `result.passed` | bool | Yes | Always | `false` |
 | `result.exit_code` | int | Yes | Always | `1` |
@@ -68,7 +71,7 @@ Captures the outcome of baseline validation (running tests before any fix).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `attempted` | bool | Yes | Whether baseline validation was attempted |
-| `failure_as_expected` | bool | Yes | Whether tests failed as expected (valid baseline) |
+| `failed_as_expected` | bool | Yes | Whether tests failed as expected (valid baseline) |
 | `exit_code` | int | Yes | The pytest exit code from baseline run |
 
 ### TaskResult
@@ -122,6 +125,11 @@ Captures timeout configuration for the attempt.
   "run_id": "01JFDABCDEF123456789",
   "task_id": "toy_fail_pytest",
   "suite": "custom-dev",
+  "task_spec_version": "1.0",
+  "harness_min_version": "0.1.0",
+  "labels": [
+    "toy"
+  ],
   "variant": "baseline",
   "model": null,
   "timestamps": {
@@ -131,7 +139,7 @@ Captures timeout configuration for the attempt.
   "duration_sec": 150.5,
   "baseline_validation": {
     "attempted": true,
-    "failure_as_expected": true,
+    "failed_as_expected": true,
     "exit_code": 1
   },
   "result": {

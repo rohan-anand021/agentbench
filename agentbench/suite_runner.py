@@ -18,8 +18,7 @@ from rich.table import Table
 
 from agentbench.tasks.loader import load_suite
 from agentbench.tasks.validator import validate_baseline
-from agentbench.util.jsonl import append_jsonl
-from agentbench.util.process import ensure_dir
+from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,12 @@ class SuiteInterrupted(Exception):
     pass
 
 
-def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
+def run_suite(
+    suite_name: str,
+    tasks_root: Path,
+    out_dir: Path,
+    skip_labels: set[str] | None = None,
+) -> Path:
     """
     Run baseline validation on all tasks in a suite.
 
@@ -49,6 +53,7 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
     """
     logger.info("Starting suite validation for %s", suite_name)
     tasks = load_suite(tasks_root=tasks_root, suite_name=suite_name)
+    skip_labels = {"flaky"} if skip_labels is None else skip_labels
 
     # Handle empty suite
     if not tasks:
@@ -65,8 +70,9 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
     run_id = str(ulid.ULID())
     run_json_path = Path(run_dir / "run.json")
     started_at = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    logs_parent_dir = Path(run_dir / "logs")
+    logs_parent_dir = ensure_dir(Path(run_dir / "logs"))
     attempts_jsonl_path = Path(logs_parent_dir, "attempts.jsonl")
+    attempts_jsonl_path.touch(exist_ok=True)
 
     runs_data = {
         "run_id": run_id,
@@ -82,7 +88,9 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
 
     valid_count = 0
     invalid_count = 0
+    skipped_count = 0
     results = []
+    skipped_tasks = []
     interrupted = False
 
     # Set up SIGINT handler
@@ -109,6 +117,20 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
                 if interrupted:
                     break
 
+                task_labels = set(task.labels or [])
+                skipped_by = sorted(task_labels & skip_labels)
+                if skipped_by:
+                    skipped_count += 1
+                    skipped_tasks.append(
+                        {"task_id": task.id, "labels": skipped_by}
+                    )
+                    results.append((task.id, None, f"skipped: {', '.join(skipped_by)}"))
+                    console.print(
+                        f"  Task {i + 1}/{len(tasks)}: {task.id}... [yellow]SKIPPED[/yellow]"
+                    )
+                    progress.advance(task_progress)
+                    continue
+
                 # create task-specific workspace subdirectory
                 task_workspace = ensure_dir(
                     Path(run_dir / "workspace" / task.id)
@@ -120,11 +142,6 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
                         task=task,
                         workspace_dir=task_workspace,
                         logs_dir=Path(logs_parent_dir / task.id),
-                    )
-
-                    append_jsonl(
-                        attempts_jsonl_path,
-                        validation_result.model_dump(mode="json"),
                     )
 
                     if validation_result.valid:
@@ -162,6 +179,8 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
         "ended_at": ended_at,
         "valid_count": valid_count,
         "invalid_count": invalid_count,
+        "skipped_count": skipped_count,
+        "skipped_tasks": skipped_tasks,
     }
 
     if interrupted:
@@ -186,7 +205,10 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
     table.add_column("Reason", style="dim")
 
     for task_id, valid, error_reason in results:
-        status = "[green]VALID[/green]" if valid else "[red]INVALID[/red]"
+        if valid is None:
+            status = "[yellow]SKIPPED[/yellow]"
+        else:
+            status = "[green]VALID[/green]" if valid else "[red]INVALID[/red]"
         reason = error_reason or "-"
         table.add_row(task_id, status, reason)
 
@@ -195,18 +217,24 @@ def run_suite(suite_name: str, tasks_root: Path, out_dir: Path) -> Path:
 
     # Summary counts
     total_processed = len(results)
-    valid_pct = (valid_count / total_processed * 100) if total_processed else 0
+    evaluated = valid_count + invalid_count
+    valid_pct = (valid_count / evaluated * 100) if evaluated else 0
+    invalid_pct = (invalid_count / evaluated * 100) if evaluated else 0
     console.print(f"[bold]Total tasks:[/bold]    {len(tasks)}")
     console.print(
         f"[green]Valid:[/green]          {valid_count} ({valid_pct:.0f}%)"
     )
     console.print(
-        f"[red]Invalid:[/red]        {invalid_count} ({100 - valid_pct:.0f}%)"
+        f"[red]Invalid:[/red]        {invalid_count} ({invalid_pct:.0f}%)"
     )
+    if skipped_count:
+        console.print(f"[yellow]Skipped:[/yellow]        {skipped_count}")
 
     # Failure reason breakdown
     failure_reasons = [
-        reason for _, valid, reason in results if not valid and reason
+        reason
+        for _, valid, reason in results
+        if valid is False and reason
     ]
     if failure_reasons:
         reason_counts = Counter(failure_reasons)

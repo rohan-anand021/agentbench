@@ -1,14 +1,99 @@
+import hashlib
 import logging
+import re
 from pathlib import Path
 
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.scoring import FailureReason
-from agentbench.tasks.models import TaskSpec, ValidationResult
+from agentbench.tasks.models import TaskSpec, ValidationResult, ValidationSpec
 from agentbench.util.attempt import AttemptContext
-from agentbench.util.git import checkout_commit, clone_repo
+from agentbench.util.git import (
+    checkout_commit,
+    clone_repo,
+    diff_patch,
+    diff_stat,
+    status_porcelain,
+)
 from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _read_log(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _failure_signature(stdout: str, stderr: str) -> str:
+    combined = "\n".join([stdout, stderr]).strip()
+    nodeids = []
+    for line in combined.splitlines():
+        match = re.match(r"^(FAILED|ERROR)\s+(.+?)(?:\s+-\s+.*)?$", line)
+        if match:
+            nodeids.append(f"{match.group(1)} {match.group(2).strip()}")
+
+    if nodeids:
+        return "nodeids:" + "|".join(sorted(set(nodeids)))
+
+    if not combined:
+        return "empty-output"
+
+    digest = hashlib.sha256(combined.encode("utf-8", errors="replace")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _evaluate_expectations(
+    validation: ValidationSpec,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+) -> list[str]:
+    mismatches: list[str] = []
+    combined = "\n".join([stdout, stderr])
+
+    if validation.expected_exit_codes:
+        if exit_code not in validation.expected_exit_codes:
+            mismatches.append(
+                f"exit_code {exit_code} not in expected_exit_codes {validation.expected_exit_codes}"
+            )
+
+    if validation.expected_failure_regex:
+        if not re.search(validation.expected_failure_regex, combined, re.MULTILINE):
+            mismatches.append(
+                f"expected_failure_regex did not match: {validation.expected_failure_regex}"
+            )
+
+    if validation.expected_stdout_regex:
+        if not re.search(validation.expected_stdout_regex, stdout, re.MULTILINE):
+            mismatches.append(
+                f"expected_stdout_regex did not match: {validation.expected_stdout_regex}"
+            )
+
+    if validation.expected_stderr_regex:
+        if not re.search(validation.expected_stderr_regex, stderr, re.MULTILINE):
+            mismatches.append(
+                f"expected_stderr_regex did not match: {validation.expected_stderr_regex}"
+            )
+
+    if validation.disallowed_failure_regex:
+        for pattern in validation.disallowed_failure_regex:
+            if re.search(pattern, combined, re.MULTILINE):
+                mismatches.append(
+                    f"disallowed_failure_regex matched: {pattern}"
+                )
+
+    if validation.expected_failing_tests:
+        for expected_test in validation.expected_failing_tests:
+            if expected_test not in combined:
+                mismatches.append(
+                    f"expected_failing_tests missing: {expected_test}"
+                )
+
+    return mismatches
 
 
 def validate_baseline(
@@ -45,6 +130,7 @@ def validate_baseline(
         `failure_reason: str | None`
     """
 
+    logs_dir = ensure_dir(logs_dir)
     repo_dir = ensure_dir(workspace_dir / "repo")
     stdout_path = None
     stderr_path = None
@@ -104,7 +190,7 @@ def validate_baseline(
             logger.debug("Setup commands: %s", setup_commands)
 
             # setup run
-            attempt.mark_stage(stage="setup_run")
+            attempt.mark_stage(stage="setup")
 
             setup_run_result = sandbox.run(
                 workspace_host_path=workspace_dir,
@@ -138,6 +224,47 @@ def validate_baseline(
 
             logger.debug("Setup completed successfully")
 
+            status_stdout, status_stderr, status_exit = status_porcelain(
+                repo_dir=repo_dir,
+                logs_dir=logs_dir,
+            )
+            attempt.add_artifact("post_setup_status_stdout", str(status_stdout))
+            attempt.add_artifact("post_setup_status_stderr", str(status_stderr))
+
+            diff_stat_stdout, diff_stat_stderr, diff_stat_exit = diff_stat(
+                repo_dir=repo_dir,
+                logs_dir=logs_dir,
+            )
+            attempt.add_artifact("post_setup_diff_stat_stdout", str(diff_stat_stdout))
+            attempt.add_artifact("post_setup_diff_stat_stderr", str(diff_stat_stderr))
+
+            diff_stdout, diff_stderr, diff_exit = diff_patch(
+                repo_dir=repo_dir,
+                logs_dir=logs_dir,
+            )
+            attempt.add_artifact("post_setup_diff_stdout", str(diff_stdout))
+            attempt.add_artifact("post_setup_diff_stderr", str(diff_stderr))
+
+            if status_exit != 0 or diff_stat_exit != 0 or diff_exit != 0:
+                attempt.set_exit_code(
+                    status_exit
+                    if status_exit != 0
+                    else diff_stat_exit
+                    if diff_stat_exit != 0
+                    else diff_exit
+                )
+                attempt.set_failure_reason(reason=FailureReason.UNKNOWN)
+                raise RuntimeError("post-setup git inspection failed")
+
+            status_output = _read_log(status_stdout).strip()
+            if status_output:
+                attempt.set_failure_reason(
+                    reason=FailureReason.SETUP_DIRTY_WORKTREE
+                )
+                raise RuntimeError(
+                    "setup modified tracked files; baseline invalid"
+                )
+
             run_cmd = task.run.command
             run_cmd = f"cd repo && {run_cmd}"
 
@@ -145,7 +272,7 @@ def validate_baseline(
             logger.debug("Run command: %s", run_cmd)
 
             # run
-            attempt.mark_stage(stage="run")
+            attempt.mark_stage(stage="baseline_run")
 
             run_run_result = sandbox.run(
                 workspace_host_path=workspace_dir,
@@ -171,11 +298,109 @@ def validate_baseline(
                 raise RuntimeError(
                     "baseline validation failed: tests passed unexpectedly"
                 )
-            elif exit_code in (124, 137):
-                attempt.set_failure_reason(reason=FailureReason.TIMEOUT)
-                raise RuntimeError(f"Run timed out with exit code: {exit_code}")
-            else:
-                attempt.valid = True
+
+            failure_reason = FailureReason.from_pytest_exit_code(exit_code)
+            if failure_reason is not None and failure_reason != FailureReason.TESTS_FAILED:
+                attempt.set_failure_reason(reason=failure_reason)
+                raise RuntimeError(
+                    f"baseline validation failed with exit code {exit_code}"
+                )
+
+            validation = task.validation
+            stdout_text = _read_log(stdout_path)
+            stderr_text = _read_log(stderr_path)
+            if validation:
+                mismatches = _evaluate_expectations(
+                    validation=validation,
+                    exit_code=exit_code,
+                    stdout=stdout_text,
+                    stderr=stderr_text,
+                )
+                if mismatches:
+                    mismatch_path = logs_dir / "baseline_expectation_mismatch.txt"
+                    mismatch_path.write_text(
+                        "\n".join(mismatches),
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                    attempt.add_artifact(
+                        "baseline_expectation_mismatch", str(mismatch_path)
+                    )
+                    attempt.set_failure_reason(
+                        reason=FailureReason.BASELINE_MISMATCH
+                    )
+                    raise RuntimeError(
+                        "baseline output did not match expected failure hints"
+                    )
+
+            signature = _failure_signature(stdout_text, stderr_text)
+            signature_path = logs_dir / "baseline_failure_signature.txt"
+            signature_path.write_text(
+                signature, encoding="utf-8", newline="\n"
+            )
+            attempt.add_artifact(
+                "baseline_failure_signature", str(signature_path)
+            )
+
+            attempt.mark_stage(stage="baseline_rerun")
+            rerun_stdout = Path(logs_dir, "run_rerun_stdout.txt")
+            rerun_stderr = Path(logs_dir, "run_rerun_stderr.txt")
+            rerun_result = sandbox.run(
+                workspace_host_path=workspace_dir,
+                command=run_cmd,
+                network="none",
+                timeout_sec=task.environment.timeout_sec,
+                stdout_path=rerun_stdout,
+                stderr_path=rerun_stderr,
+            )
+
+            attempt.add_artifact("run_rerun_stdout", str(rerun_stdout))
+            attempt.add_artifact("run_rerun_stderr", str(rerun_stderr))
+
+            rerun_stdout_text = _read_log(rerun_stdout)
+            rerun_stderr_text = _read_log(rerun_stderr)
+            rerun_signature = _failure_signature(
+                rerun_stdout_text, rerun_stderr_text
+            )
+            rerun_signature_path = logs_dir / "baseline_rerun_signature.txt"
+            rerun_signature_path.write_text(
+                rerun_signature, encoding="utf-8", newline="\n"
+            )
+            attempt.add_artifact(
+                "baseline_rerun_signature", str(rerun_signature_path)
+            )
+
+            comparison_path = logs_dir / "baseline_rerun_comparison.txt"
+            comparison_path.write_text(
+                "\n".join(
+                    [
+                        f"run_1_exit_code: {exit_code}",
+                        f"run_1_signature: {signature}",
+                        f"run_2_exit_code: {rerun_result.exit_code}",
+                        f"run_2_signature: {rerun_signature}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            attempt.add_artifact(
+                "baseline_rerun_comparison", str(comparison_path)
+            )
+
+            if (
+                rerun_result.exit_code != exit_code
+                or rerun_signature != signature
+            ):
+                attempt.set_exit_code(rerun_result.exit_code)
+                attempt.set_failure_reason(
+                    reason=FailureReason.BASELINE_FLAKY
+                )
+                raise RuntimeError(
+                    "baseline validation failed: flaky baseline"
+                )
+
+            attempt.valid = True
 
         except Exception as e:
             logger.error("Validation failed: %s", str(e))

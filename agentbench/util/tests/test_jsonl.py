@@ -175,6 +175,9 @@ class TestAttemptRecordSchema:
             "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "task_id": "toy_fail_pytest",
             "suite": "custom-dev",
+            "task_spec_version": "1.0",
+            "harness_min_version": "0.1.0",
+            "labels": ["smoke"],
             "timestamps": {
                 "started_at": "2025-01-01T12:00:00",
                 "ended_at": "2025-01-01T12:01:00",
@@ -182,7 +185,7 @@ class TestAttemptRecordSchema:
             "duration_sec": 60.0,
             "baseline_validation": {
                 "attempted": True,
-                "failure_as_expected": True,
+                "failed_as_expected": True,
                 "exit_code": 1,
             },
             "result": {
@@ -200,7 +203,6 @@ class TestAttemptRecordSchema:
                 "timeout_sec": 300,
                 "tool_timeout_sec": None,
             },
-            "record_version": "0.1.0",
             "schema_version": "0.1.0",
         }
 
@@ -215,7 +217,6 @@ class TestAttemptRecordSchema:
         assert record.duration_sec == 60.0
         assert record.baseline_validation.attempted is True
         assert record.result.passed is True
-        assert record.record_version == data["record_version"]
 
     def test_timestamp_info_parsing(self):
         """TimestampInfo should correctly parse datetime strings."""

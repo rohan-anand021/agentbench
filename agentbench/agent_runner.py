@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import ulid
@@ -38,7 +38,7 @@ def run_agent_attempt(
     """
 
     run_id = str(ulid.ULID())
-    started_at = datetime.now()
+    started_at = datetime.now(timezone.utc)
     logger.info("Starting agent attempt %s for task %s", run_id, task.id)
     
     result = None
@@ -104,7 +104,7 @@ def run_agent_attempt(
         logger.exception("Agent attempt %s failed with error: %s", run_id, e)
         failure_reason = FailureReason.UNKNOWN
 
-    ended_at = datetime.now()
+    ended_at = datetime.now(timezone.utc)
     duration = (ended_at - started_at).total_seconds()
     logger.info("Agent attempt %s completed in %.2fs, passed=%s", run_id, duration, result.success if result else False)
 
@@ -112,6 +112,9 @@ def run_agent_attempt(
         run_id = run_id,
         task_id = task.id,
         suite = task.suite,
+        task_spec_version = task.task_spec_version,
+        harness_min_version = task.harness_min_version,
+        labels = task.labels,
         timestamps = TimestampInfo(
             started_at = started_at,
             ended_at = ended_at
@@ -119,7 +122,7 @@ def run_agent_attempt(
         duration_sec = (ended_at - started_at).total_seconds(),
         baseline_validation = BaselineValidationResult(
             attempted = validation_result is not None,
-            failure_as_expected = validation_result.exit_code != 0 if validation_result else False,
+            failed_as_expected = validation_result.exit_code != 0 if validation_result else False,
             exit_code = validation_result.exit_code if validation_result else -1
         ),
         result = TaskResult(
@@ -149,4 +152,3 @@ def run_agent_attempt(
     
 
     
-

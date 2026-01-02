@@ -1,5 +1,9 @@
+task_spec_version: "1.0"
 id: toy_setup_fail
 suite: custom-dev
+harness_min_version: "0.1.0"
+labels:
+  - toy
 
 repo:
   url: examples/toy_repo
@@ -17,4 +21,3 @@ setup:
 
 run:
   command: PYTHONPATH=/workspace/site-packages pytest -q
-

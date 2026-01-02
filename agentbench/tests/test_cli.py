@@ -23,7 +23,7 @@ class TestRunTaskCommand:
         """run-task requires task path argument."""
         result = runner.invoke(app, ["run-task"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        assert "Missing task path" in result.output
 
     def test_run_task_default_output_dir(self):
         """run-task uses 'artifacts' as default output directory."""

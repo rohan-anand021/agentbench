@@ -123,6 +123,7 @@ class TestTaskSpec:
     def make_valid_task_spec(self, **overrides) -> TaskSpec:
         """Helper to create a valid TaskSpec with optional overrides."""
         defaults = {
+            "task_spec_version": "1.0",
             "id": "test-task-1",
             "suite": "test-suite",
             "repo": RepoSpec(
@@ -136,6 +137,9 @@ class TestTaskSpec:
             ),
             "setup": SetupSpec(commands=["pip install -e ."]),
             "run": RunSpec(command="pytest tests/"),
+            "validation": None,
+            "harness_min_version": "0.1.0",
+            "labels": ["smoke"],
             "source_path": Path("/tasks/test-suite/test-task-1/task.yaml"),
         }
         defaults.update(overrides)
@@ -150,11 +154,15 @@ class TestTaskSpec:
         assert task.environment.docker_image == "python:3.11"
         assert len(task.setup.commands) == 1
         assert task.run.command == "pytest tests/"
+        assert task.task_spec_version == "1.0"
+        assert task.harness_min_version == "0.1.0"
+        assert task.labels == ["smoke"]
 
     def test_task_spec_requires_id(self):
         """TaskSpec requires id field."""
         with pytest.raises(ValidationError):
             TaskSpec(
+                task_spec_version="1.0",
                 suite="test-suite",
                 repo=RepoSpec(url="https://example.com", commit="abc"),
                 environment=EnvironmentSpec(
@@ -162,6 +170,9 @@ class TestTaskSpec:
                 ),
                 setup=SetupSpec(commands=[]),
                 run=RunSpec(command="test"),
+                validation=None,
+                harness_min_version=None,
+                labels=None,
                 source_path=Path("/path"),
             )
 
@@ -169,6 +180,7 @@ class TestTaskSpec:
         """TaskSpec requires suite field."""
         with pytest.raises(ValidationError):
             TaskSpec(
+                task_spec_version="1.0",
                 id="test-1",
                 repo=RepoSpec(url="https://example.com", commit="abc"),
                 environment=EnvironmentSpec(
@@ -176,6 +188,9 @@ class TestTaskSpec:
                 ),
                 setup=SetupSpec(commands=[]),
                 run=RunSpec(command="test"),
+                validation=None,
+                harness_min_version=None,
+                labels=None,
                 source_path=Path("/path"),
             )
 

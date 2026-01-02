@@ -24,6 +24,7 @@ from agentbench.tasks.validator import validate_baseline
 def mock_task_spec() -> TaskSpec:
     """Creates a mock TaskSpec for unit testing."""
     return TaskSpec(
+        task_spec_version="1.0",
         id="test_task",
         suite="test-suite",
         repo=RepoSpec(url="https://github.com/example/repo", commit="abc123"),
@@ -34,6 +35,9 @@ def mock_task_spec() -> TaskSpec:
         ),
         setup=SetupSpec(commands=["pip install ."]),
         run=RunSpec(command="pytest -q"),
+        validation=None,
+        harness_min_version=None,
+        labels=["smoke"],
         source_path=Path("/tmp/test/task.yaml"),
     )
 
@@ -100,6 +104,7 @@ def test_validate_baseline_setup_failures_are_caught(tmp_path: Path):
     """
     # Create a minimal task spec with a failing setup command
     task = TaskSpec(
+        task_spec_version="1.0",
         id="broken_setup_task",
         suite="test-suite",
         repo=RepoSpec(
@@ -117,6 +122,9 @@ def test_validate_baseline_setup_failures_are_caught(tmp_path: Path):
         ),
         setup=SetupSpec(commands=["pip install nonexistent-package-xyz-12345"]),
         run=RunSpec(command="pytest -q"),
+        validation=None,
+        harness_min_version=None,
+        labels=None,
         source_path=Path("/tmp/test/task.yaml"),
     )
 
@@ -131,7 +139,7 @@ def test_validate_baseline_setup_failures_are_caught(tmp_path: Path):
 
     assert isinstance(result, ValidationResult)
     assert result.valid is False
-    assert result.error_reason == FailureReason.GIT_CLONE_FAILED
+    assert result.error_reason == FailureReason.SETUP_FAILED
 
 
 # =============================================================================
@@ -139,6 +147,9 @@ def test_validate_baseline_setup_failures_are_caught(tmp_path: Path):
 # =============================================================================
 
 
+@patch("agentbench.tasks.validator.diff_patch")
+@patch("agentbench.tasks.validator.diff_stat")
+@patch("agentbench.tasks.validator.status_porcelain")
 @patch("agentbench.tasks.validator.DockerSandbox")
 @patch("agentbench.tasks.validator.checkout_commit")
 @patch("agentbench.tasks.validator.clone_repo")
@@ -146,6 +157,9 @@ def test_validate_baseline_returns_valid_when_tests_fail(
     mock_clone_repo,
     mock_checkout_commit,
     mock_docker_sandbox,
+    mock_status_porcelain,
+    mock_diff_stat,
+    mock_diff_patch,
     mock_task_spec: TaskSpec,
     tmp_path: Path,
 ):
@@ -180,7 +194,32 @@ def test_validate_baseline_returns_valid_when_tests_fail(
         stdout_path=tmp_path / "run_stdout.txt",
         stderr_path=tmp_path / "run_stderr.txt",
     )
-    mock_sandbox_instance.run.side_effect = [setup_result, run_result]
+    rerun_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_rerun_stdout.txt",
+        stderr_path=tmp_path / "run_rerun_stderr.txt",
+    )
+    mock_sandbox_instance.run.side_effect = [
+        setup_result,
+        run_result,
+        rerun_result,
+    ]
+
+    mock_status_porcelain.return_value = (
+        tmp_path / "status_stdout.txt",
+        tmp_path / "status_stderr.txt",
+        0,
+    )
+    mock_diff_stat.return_value = (
+        tmp_path / "diff_stat_stdout.txt",
+        tmp_path / "diff_stat_stderr.txt",
+        0,
+    )
+    mock_diff_patch.return_value = (
+        tmp_path / "diff_stdout.txt",
+        tmp_path / "diff_stderr.txt",
+        0,
+    )
 
     workspace_dir = tmp_path / "workspace"
     logs_dir = tmp_path / "logs"
@@ -192,6 +231,88 @@ def test_validate_baseline_returns_valid_when_tests_fail(
     assert result.valid is True
     assert result.exit_code == 1
     assert result.error_reason is None
+
+
+@patch("agentbench.tasks.validator.diff_patch")
+@patch("agentbench.tasks.validator.diff_stat")
+@patch("agentbench.tasks.validator.status_porcelain")
+@patch("agentbench.tasks.validator.DockerSandbox")
+@patch("agentbench.tasks.validator.checkout_commit")
+@patch("agentbench.tasks.validator.clone_repo")
+def test_validate_baseline_marks_flaky_when_rerun_differs(
+    mock_clone_repo,
+    mock_checkout_commit,
+    mock_docker_sandbox,
+    mock_status_porcelain,
+    mock_diff_stat,
+    mock_diff_patch,
+    mock_task_spec: TaskSpec,
+    tmp_path: Path,
+):
+    """Unit test: Returns BASELINE_FLAKY when rerun does not match initial failure."""
+    mock_clone_repo.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+    mock_checkout_commit.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+
+    (tmp_path / "stdout.txt").touch()
+    (tmp_path / "stderr.txt").touch()
+
+    mock_sandbox_instance = MagicMock()
+    mock_docker_sandbox.return_value = mock_sandbox_instance
+
+    setup_result = Mock(
+        exit_code=0,
+        stdout_path=tmp_path / "setup_stdout.txt",
+        stderr_path=tmp_path / "setup_stderr.txt",
+    )
+    run_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_stdout.txt",
+        stderr_path=tmp_path / "run_stderr.txt",
+    )
+    rerun_result = Mock(
+        exit_code=0,
+        stdout_path=tmp_path / "run_rerun_stdout.txt",
+        stderr_path=tmp_path / "run_rerun_stderr.txt",
+    )
+    mock_sandbox_instance.run.side_effect = [
+        setup_result,
+        run_result,
+        rerun_result,
+    ]
+
+    mock_status_porcelain.return_value = (
+        tmp_path / "status_stdout.txt",
+        tmp_path / "status_stderr.txt",
+        0,
+    )
+    mock_diff_stat.return_value = (
+        tmp_path / "diff_stat_stdout.txt",
+        tmp_path / "diff_stat_stderr.txt",
+        0,
+    )
+    mock_diff_patch.return_value = (
+        tmp_path / "diff_stdout.txt",
+        tmp_path / "diff_stderr.txt",
+        0,
+    )
+
+    workspace_dir = tmp_path / "workspace"
+    logs_dir = tmp_path / "logs"
+
+    result = validate_baseline(
+        task=mock_task_spec, workspace_dir=workspace_dir, logs_dir=logs_dir
+    )
+
+    assert result.valid is False
+    assert result.error_reason == FailureReason.BASELINE_FLAKY
 
 
 @pytest.mark.xfail(reason="Mock setup doesn't properly handle AttemptContext exception flow")
@@ -245,7 +366,7 @@ def test_validate_baseline_returns_invalid_when_tests_pass(
 
     assert result.valid is False
     assert result.exit_code == 0
-    assert result.error_reason == "baseline_passed"
+    assert result.error_reason == FailureReason.BASELINE_NOT_FAILING
 
 
 @pytest.mark.xfail(reason="Mock setup doesn't properly handle AttemptContext exception flow")
@@ -294,7 +415,7 @@ def test_validate_baseline_returns_invalid_on_setup_failure(
     )
 
     assert result.valid is False
-    assert result.error_reason == "setup_failed"
+    assert result.error_reason == FailureReason.SETUP_FAILED
 
 
 @pytest.mark.xfail(reason="Mock setup doesn't properly handle AttemptContext exception flow")
@@ -343,7 +464,7 @@ def test_validate_baseline_returns_invalid_on_setup_timeout(
     )
 
     assert result.valid is False
-    assert result.error_reason == "setup_timeout"
+    assert result.error_reason == FailureReason.SETUP_TIMEOUT
 
 
 @pytest.mark.xfail(reason="Mock setup doesn't properly handle AttemptContext exception flow")

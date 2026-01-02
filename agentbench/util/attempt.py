@@ -20,7 +20,7 @@ Usage:
 
 from __future__ import annotations
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import ulid
@@ -97,13 +97,13 @@ class AttemptContext:
         self.artifacts[name] = path
 
     def __enter__(self) -> AttemptContext:
-        self.started_at = datetime.now()
+        self.started_at = datetime.now(timezone.utc)
         self.attempted = True
         logger.debug("AttemptContext entered for run %s", self.run_id)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        self.ended_at = datetime.now()
+        self.ended_at = datetime.now(timezone.utc)
 
         if exc_type is not None:
             if exc_type is KeyboardInterrupt:
@@ -120,13 +120,16 @@ class AttemptContext:
             run_id=self.run_id,
             task_id=self.task.id,
             suite=self.task.suite,
+            task_spec_version=self.task.task_spec_version,
+            harness_min_version=self.task.harness_min_version,
+            labels=self.task.labels,
             timestamps=TimestampInfo(
                 started_at=self.started_at, ended_at=self.ended_at
             ),
             duration_sec=self.duration,
             baseline_validation=BaselineValidationResult(
                 attempted=self.attempted,
-                failure_as_expected=self.valid,
+                failed_as_expected=self.valid,
                 exit_code=self.exit_code if self.exit_code is not None else -1,
             ),
             result=TaskResult(

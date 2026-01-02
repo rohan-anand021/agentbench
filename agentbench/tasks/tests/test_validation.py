@@ -11,6 +11,7 @@ from agentbench.tasks.validation import validate_task_yaml
 def make_valid_task_dict() -> dict:
     """Helper to create a valid task dictionary."""
     return {
+        "task_spec_version": "1.0",
         "id": "test-task-1",
         "suite": "test-suite",
         "repo": {
@@ -27,6 +28,11 @@ def make_valid_task_dict() -> dict:
         },
         "run": {
             "command": "pytest tests/",
+        },
+        "harness_min_version": "0.1.0",
+        "labels": ["smoke"],
+        "validation": {
+            "expected_exit_codes": [1],
         },
     }
 
@@ -46,6 +52,15 @@ class TestValidateTaskYaml:
         """Missing 'id' field raises InvalidTaskError."""
         task = make_valid_task_dict()
         del task["id"]
+        task_path = tmp_path / "task.yaml"
+
+        with pytest.raises(InvalidTaskError):
+            validate_task_yaml(task, task_path)
+
+    def test_missing_task_spec_version_raises_error(self, tmp_path: Path):
+        """Missing 'task_spec_version' field raises InvalidTaskError."""
+        task = make_valid_task_dict()
+        del task["task_spec_version"]
         task_path = tmp_path / "task.yaml"
 
         with pytest.raises(InvalidTaskError):
@@ -154,6 +169,33 @@ class TestValidateTaskYaml:
         """Missing 'run.command' field raises InvalidTaskError."""
         task = make_valid_task_dict()
         del task["run"]["command"]
+        task_path = tmp_path / "task.yaml"
+
+        with pytest.raises(InvalidTaskError):
+            validate_task_yaml(task, task_path)
+
+    def test_unexpected_key_raises_error(self, tmp_path: Path):
+        """Unexpected keys raise InvalidTaskError."""
+        task = make_valid_task_dict()
+        task["extra_key"] = "nope"
+        task_path = tmp_path / "task.yaml"
+
+        with pytest.raises(InvalidTaskError):
+            validate_task_yaml(task, task_path)
+
+    def test_invalid_task_spec_version_raises_error(self, tmp_path: Path):
+        """Unsupported task_spec_version should raise InvalidTaskError."""
+        task = make_valid_task_dict()
+        task["task_spec_version"] = "99.0"
+        task_path = tmp_path / "task.yaml"
+
+        with pytest.raises(InvalidTaskError):
+            validate_task_yaml(task, task_path)
+
+    def test_invalid_regex_raises_error(self, tmp_path: Path):
+        """Invalid regex in validation hints should raise InvalidTaskError."""
+        task = make_valid_task_dict()
+        task["validation"]["expected_failure_regex"] = "("
         task_path = tmp_path / "task.yaml"
 
         with pytest.raises(InvalidTaskError):

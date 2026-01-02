@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from agentbench.sandbox.docker_sandbox import DockerRunResult
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 import subprocess
@@ -26,7 +27,10 @@ from agentbench.tools.contract import (
 )
 from agentbench.util.process import check_exit_code
 from agentbench.util.timeout import ToolTimeoutError, TOOL_TIMEOUTS
-from agentbench.util.truncation import truncate_output
+from agentbench.util.truncation import (
+    MAX_OUTPUT_LINES,
+    truncate_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +382,7 @@ def run_tool(
     | Timeout | Use `params.timeout_sec` or default from task config |
     | Output files | Save to `logs/tool_step_NNNN_stdout.txt` and `_stderr.txt` |
     | Exit code | Capture and return in result |
-    | Large output | Truncate to configurable limit (e.g., 100KB) |
+    | Large output | Truncate and record truncation metadata |
 
     **Success data:**
     ```python
@@ -397,8 +401,60 @@ def run_tool(
     stderr_path = None
     logger.debug("Executing command in sandbox: %s", params.command)
 
+    def _truncate_log_file(
+        path: Path | None,
+        full_logs: bool,
+    ) -> dict[str, int | bool | None]:
+        if path is None or not path.exists():
+            return {
+                "bytes": None,
+                "lines": None,
+                "truncated": False,
+                "kept_head_lines": None,
+                "kept_tail_lines": None,
+            }
+
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {
+                "bytes": None,
+                "lines": None,
+                "truncated": False,
+                "kept_head_lines": None,
+                "kept_tail_lines": None,
+            }
+
+        byte_len = len(content.encode("utf-8"))
+        line_count = len(content.splitlines())
+        if full_logs:
+            return {
+                "bytes": byte_len,
+                "lines": line_count,
+                "truncated": False,
+                "kept_head_lines": None,
+                "kept_tail_lines": None,
+            }
+
+        truncated_content, was_truncated = truncate_output(content)
+
+        kept_head = None
+        kept_tail = None
+        if was_truncated and truncated_content != content:
+            kept_head = MAX_OUTPUT_LINES // 2
+            kept_tail = MAX_OUTPUT_LINES // 2
+            path.write_text(truncated_content, encoding="utf-8", newline="\n")
+
+        return {
+            "bytes": byte_len,
+            "lines": line_count,
+            "truncated": was_truncated,
+            "kept_head_lines": kept_head,
+            "kept_tail_lines": kept_tail,
+        }
+
     try:
-        exit_code, stdout_path, stderr_path = sandbox.run(
+        run_result = sandbox.run(
             workspace_host_path = workspace_root,
             command = params.command,
             network = "none",
@@ -406,6 +462,9 @@ def run_tool(
             stdout_path = artifacts_dir / "logs" / f"tool_step_{step_id:04d}_stdout.txt",
             stderr_path = artifacts_dir / "logs" / f"tool_step_{step_id:04d}_stderr.txt",
         )
+        exit_code = run_result.exit_code
+        stdout_path = run_result.stdout_path
+        stderr_path = run_result.stderr_path
 
         if exit_code is not None:
             exit_error = check_exit_code("run", exit_code)
@@ -433,10 +492,33 @@ def run_tool(
 
     data = None
     if not error and exit_code is not None:
+        full_logs = os.getenv("AGENTBENCH_FULL_LOGS", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        stdout_meta = _truncate_log_file(
+            Path(stdout_path) if stdout_path else None,
+            full_logs=full_logs,
+        )
+        stderr_meta = _truncate_log_file(
+            Path(stderr_path) if stderr_path else None,
+            full_logs=full_logs,
+        )
         data = {
             "exit_code": exit_code,
             "stdout_path": str(stdout_path) if stdout_path else None,
             "stderr_path": str(stderr_path) if stderr_path else None,
+            "stdout_bytes": stdout_meta["bytes"],
+            "stderr_bytes": stderr_meta["bytes"],
+            "stdout_lines": stdout_meta["lines"],
+            "stderr_lines": stderr_meta["lines"],
+            "stdout_truncated": stdout_meta["truncated"],
+            "stderr_truncated": stderr_meta["truncated"],
+            "stdout_kept_head_lines": stdout_meta["kept_head_lines"],
+            "stdout_kept_tail_lines": stdout_meta["kept_tail_lines"],
+            "stderr_kept_head_lines": stderr_meta["kept_head_lines"],
+            "stderr_kept_tail_lines": stderr_meta["kept_tail_lines"],
         }
 
     return ToolResult(
@@ -452,5 +534,3 @@ def run_tool(
         stdout_path = str(stdout_path) if stdout_path else None,
         stderr_path = str(stderr_path) if stderr_path else None,
     )
-
-

@@ -16,6 +16,9 @@ def create_mock_task(task_id: str = "test-task-1", suite: str = "test-suite"):
     mock_task.id = task_id
     mock_task.suite = suite
     mock_task.environment.timeout_sec = 300
+    mock_task.task_spec_version = "1.0"
+    mock_task.harness_min_version = None
+    mock_task.labels = None
     return mock_task
 
 

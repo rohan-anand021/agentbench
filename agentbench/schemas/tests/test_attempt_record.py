@@ -18,6 +18,9 @@ def make_valid_attempt_record(**overrides) -> AttemptRecord:
         "run_id": "01ABC123XYZ",
         "task_id": "test-task-id",
         "suite": "test-suite",
+        "task_spec_version": "1.0",
+        "harness_min_version": "0.1.0",
+        "labels": ["smoke"],
         "timestamps": TimestampInfo(
             started_at=datetime(2025, 1, 1, 10, 0, 0, tzinfo=UTC),
             ended_at=datetime(2025, 1, 1, 10, 5, 0, tzinfo=UTC),
@@ -25,7 +28,7 @@ def make_valid_attempt_record(**overrides) -> AttemptRecord:
         "duration_sec": 300.0,
         "baseline_validation": BaselineValidationResult(
             attempted=True,
-            failure_as_expected=True,
+            failed_as_expected=True,
             exit_code=1,
         ),
         "result": TaskResult(
@@ -37,7 +40,6 @@ def make_valid_attempt_record(**overrides) -> AttemptRecord:
         "variant": "baseline",
         "model": None,
         "limits": LimitsConfig(timeout_sec=600, tool_timeout_sec=None),
-        "record_version": "1.0",
         "schema_version": "1.0",
     }
     defaults.update(overrides)
@@ -53,9 +55,11 @@ class TestAttemptRecordCreation:
         assert record.run_id == "01ABC123XYZ"
         assert record.task_id == "test-task-id"
         assert record.suite == "test-suite"
+        assert record.task_spec_version == "1.0"
+        assert record.harness_min_version == "0.1.0"
+        assert record.labels == ["smoke"]
         assert record.duration_sec == 300.0
         assert record.variant == "baseline"
-        assert record.record_version == "1.0"
         assert record.schema_version == "1.0"
         assert record.model is None
         assert record.limits.timeout_sec == 600
@@ -70,13 +74,16 @@ class TestAttemptRecordMissingFields:
                 # run_id is missing
                 task_id="test-task-id",
                 suite="test-suite",
+                task_spec_version="1.0",
+                harness_min_version=None,
+                labels=None,
                 timestamps=TimestampInfo(
                     started_at=datetime(2025, 1, 1, 10, 0, 0, tzinfo=UTC),
                     ended_at=datetime(2025, 1, 1, 10, 5, 0, tzinfo=UTC),
                 ),
                 duration_sec=300.0,
                 baseline_validation=BaselineValidationResult(
-                    attempted=True, failure_as_expected=True, exit_code=1
+                    attempted=True, failed_as_expected=True, exit_code=1
                 ),
                 result=TaskResult(
                     passed=True, exit_code=0, failure_reason=None
@@ -91,25 +98,14 @@ class TestAttemptRecordMissingFields:
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("run_id",) for e in errors)
 
-    def test_missing_versions_raise_validation_error(self):
+    def test_missing_schema_version_raises_validation_error(self):
         with pytest.raises(ValidationError) as exc_info:
             data = make_valid_attempt_record().model_dump(mode="json")
             data.pop("schema_version", None)
-            data.pop("record_version", None)
             AttemptRecord.model_validate(data)
 
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("schema_version",) for e in errors)
-        assert any(e["loc"] == ("record_version",) for e in errors)
-
-    def test_record_version_populates_schema_version(self):
-        data = make_valid_attempt_record().model_dump(mode="json")
-        data.pop("schema_version", None)
-        data["record_version"] = "2.0"
-        record = AttemptRecord.model_validate(data)
-
-        assert record.schema_version == "2.0"
-        assert record.record_version == "2.0"
 
 
 class TestAttemptRecordModelField:
@@ -155,7 +151,6 @@ class TestAttemptRecordRoundTrip:
         assert restored.suite == original.suite
         assert restored.duration_sec == original.duration_sec
         assert restored.variant == original.variant
-        assert restored.record_version == original.record_version
         assert restored.schema_version == original.schema_version
         assert restored.model == original.model
         assert restored.limits == original.limits
@@ -203,8 +198,8 @@ class TestTimestampSerialization:
         assert "T" in ended_at
 
         # Verify the values are correct ISO 8601 representations
-        assert started_at == "2025-01-01T10:00:00Z"
-        assert ended_at == "2025-01-01T10:05:00Z"
+        assert started_at == "2025-01-01T10:00:00+00:00"
+        assert ended_at == "2025-01-01T10:05:00+00:00"
 
     def test_timestamps_with_different_timezone(self):
         from datetime import timedelta

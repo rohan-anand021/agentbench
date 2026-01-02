@@ -43,8 +43,14 @@ def print_agent_summary(record: AttemptRecord) -> None:
 
 @app.command("run-task")
 def run_task_cmd(
-    task: Path = typer.Argument(
-        ...,
+    task: Path | None = typer.Argument(
+        None,
+        help="Path to the task YAML file (positional)",
+    ),
+    task_opt: Path | None = typer.Option(
+        None,
+        "--task",
+        "-t",
         help="Path to the task YAML file",
     ),
     out: Path = typer.Option(
@@ -60,8 +66,14 @@ def run_task_cmd(
     This command runs a task inside a Docker container, captures all output,
     and stores the results in an artifact directory with a unique run ID.
     """
-    logger.info("Running task from %s", task)
-    path = run_task(task, out)
+    if task is not None and task_opt is not None:
+        raise typer.BadParameter("Use either TASK or --task, not both.")
+    task_path = task_opt or task
+    if task_path is None:
+        raise typer.BadParameter("Missing task path. Provide TASK or --task.")
+
+    logger.info("Running task from %s", task_path)
+    path = run_task(task_path, out)
     logger.info("Task completed, artifacts saved to %s", path)
     typer.echo(f"Run completed. Artifacts saved to: {path}")
 
@@ -140,6 +152,11 @@ def validate_suite_cmd(
     out: Path = typer.Option(
         Path("artifacts"), "--out", "-o", help="Output directory for artifacts"
     ),
+    include_flaky: bool = typer.Option(
+        False,
+        "--include-flaky",
+        help="Include tasks labeled 'flaky' (skipped by default)",
+    ),
 ):
     """
     Validate all tasks in a suite.
@@ -149,8 +166,12 @@ def validate_suite_cmd(
     """
     try:
         logger.info("Validating suite %s", suite)
+        skip_labels = set() if include_flaky else {"flaky"}
         runs_dir = run_suite(
-            suite_name=suite, tasks_root=tasks_root, out_dir=out
+            suite_name=suite,
+            tasks_root=tasks_root,
+            out_dir=out,
+            skip_labels=skip_labels,
         )
 
         if runs_dir is None:

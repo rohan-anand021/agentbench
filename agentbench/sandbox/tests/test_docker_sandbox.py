@@ -131,6 +131,14 @@ class TestDockerSandboxCommandBuilding:
             assert cmd[0] == "docker"
             assert cmd[1] == "run"
             assert "--rm" in cmd
+            assert "--cap-drop=ALL" in cmd
+            assert "--security-opt" in cmd
+            assert "no-new-privileges" in cmd
+            assert "--pids-limit=512" in cmd
+            assert "--ipc=none" in cmd
+            assert "--tmpfs" in cmd
+            assert "/tmp" in cmd
+            assert "--read-only" in cmd
             assert "--network" in cmd
             assert "none" in cmd
             assert "-v" in cmd
@@ -281,6 +289,7 @@ class TestDockerSandboxOutputPaths:
 
             assert result.stdout_path == stdout_path
             assert result.stderr_path == stderr_path
+            assert result.docker_cmd[0] == "docker"
 
 
 class TestDockerRunResult:
@@ -292,8 +301,10 @@ class TestDockerRunResult:
             exit_code=0,
             stdout_path=tmp_path / "stdout.txt",
             stderr_path=tmp_path / "stderr.txt",
+            docker_cmd=["docker", "run"],
         )
 
         assert result.exit_code == 0
         assert result.stdout_path == tmp_path / "stdout.txt"
         assert result.stderr_path == tmp_path / "stderr.txt"
+        assert result.docker_cmd == ["docker", "run"]

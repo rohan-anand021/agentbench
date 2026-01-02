@@ -1,5 +1,9 @@
+task_spec_version: "1.0"
 id: toy_fail_pytest
 suite: custom-dev
+harness_min_version: "0.1.0"
+labels:
+  - toy
 
 repo:
   url: examples/toy_repo

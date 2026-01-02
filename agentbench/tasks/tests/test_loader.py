@@ -16,6 +16,7 @@ from agentbench.tasks.models import TaskSpec
 def valid_task_yaml_content() -> dict:
     """Returns a valid task.yaml content as a dictionary."""
     return {
+        "task_spec_version": "1.0",
         "id": "test_task",
         "suite": "test-suite",
         "repo": {
@@ -29,6 +30,8 @@ def valid_task_yaml_content() -> dict:
         },
         "setup": {"commands": ["pip install --upgrade pip", "pip install ."]},
         "run": {"command": "pytest -q"},
+        "harness_min_version": "0.1.0",
+        "labels": ["smoke"],
     }
 
 
@@ -60,6 +63,7 @@ def incomplete_task_yaml_content() -> dict:
 def invalid_field_types_yaml_content() -> dict:
     """Returns task.yaml content with wrong field types."""
     return {
+        "task_spec_version": "1.0",
         "id": "bad_types_task",
         "suite": "test-suite",
         "repo": {"url": "https://github.com/example/repo", "commit": "abc123"},

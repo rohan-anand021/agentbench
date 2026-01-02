@@ -28,7 +28,10 @@ class FailureReason(StrEnum):
     |------|-------------|-------------|
     | `SETUP_FAILED` | Dependency install failure, missing tools | Setup command returns non-zero (not timeout) |
     | `SETUP_TIMEOUT` | Setup exceeded time limit | Setup command returns exit code 124 or 137 |
+    | `SETUP_DIRTY_WORKTREE` | Setup modified tracked files | Git status shows tracked changes after setup |
     | `BASELINE_NOT_FAILING` | Task is invalid (tests pass before fix) | Baseline validation: exit code 0 |
+    | `BASELINE_MISMATCH` | Baseline failed but didn't match expectations | Expected exit/test signature mismatch |
+    | `BASELINE_FLAKY` | Baseline failure is inconsistent | Baseline rerun differs from initial failure |
     | `TIMEOUT` | Run command exceeded time limit | Run command returns exit code 124 or 137 |
     | `SANDBOX_ERROR` | Docker issues, container failures | Docker command fails, container won't start |
     | `GIT_CLONE_FAILED` | Could not clone repository | git clone returns non-zero |
@@ -45,7 +48,10 @@ class FailureReason(StrEnum):
 
     SETUP_FAILED = "SETUP_FAILED"
     SETUP_TIMEOUT = "SETUP_TIMEOUT"
+    SETUP_DIRTY_WORKTREE = "SETUP_DIRTY_WORKTREE"
     BASELINE_NOT_FAILING = "BASELINE_NOT_FAILING"
+    BASELINE_MISMATCH = "BASELINE_MISMATCH"
+    BASELINE_FLAKY = "BASELINE_FLAKY"
     TIMEOUT = "TIMEOUT"
     SANDBOX_ERROR = "SANDBOX_ERROR"
     GIT_CLONE_FAILED = "GIT_CLONE_FAILED"
@@ -161,30 +167,36 @@ class FailureReason(StrEnum):
             2. GIT_CHECKOUT_FAILED (can't get correct version)
             3. SETUP_TIMEOUT (setup never completed)
             4. SETUP_FAILED (dependencies broken)
-            5. BASELINE_NOT_FAILING (task is invalid)
-            6. SANDBOX_ERROR (execution environment broken)
-            7. LLM_ERROR (can't get agent responses)
-            8. TOOL_ERROR (agent's tool calls fail)
-            9. TIMEOUT (ran out of time)
-            10. AGENT_GAVE_UP (budget exhausted)
-            11. TESTS_FAILED (agent tried but didn't fix)
-            12. NO_TESTS_COLLECTED, INTERNAL_ERROR, INTERRUPTED, UNKNOWN
+            5. SETUP_DIRTY_WORKTREE (setup modified tracked files)
+            6. BASELINE_NOT_FAILING (task is invalid)
+            7. BASELINE_MISMATCH (baseline failure didn't match expectations)
+            8. BASELINE_FLAKY (baseline is inconsistent)
+            9. SANDBOX_ERROR (execution environment broken)
+            10. LLM_ERROR (can't get agent responses)
+            11. TOOL_ERROR (agent's tool calls fail)
+            12. TIMEOUT (ran out of time)
+            13. AGENT_GAVE_UP (budget exhausted)
+            14. TESTS_FAILED (agent tried but didn't fix)
+            15. NO_TESTS_COLLECTED, INTERNAL_ERROR, INTERRUPTED, UNKNOWN
         """
         precedence_order = {
             FailureReason.GIT_CLONE_FAILED: 1,
             FailureReason.GIT_CHECKOUT_FAILED: 2,
             FailureReason.SETUP_TIMEOUT: 3,
             FailureReason.SETUP_FAILED: 4,
-            FailureReason.BASELINE_NOT_FAILING: 5,
-            FailureReason.SANDBOX_ERROR: 6,
-            FailureReason.LLM_ERROR: 7,
-            FailureReason.TOOL_ERROR: 8,
-            FailureReason.TIMEOUT: 9,
-            FailureReason.AGENT_GAVE_UP: 10,
-            FailureReason.TESTS_FAILED: 11,
-            FailureReason.NO_TESTS_COLLECTED: 12,
-            FailureReason.INTERNAL_ERROR: 13,
-            FailureReason.INTERRUPTED: 14,
-            FailureReason.UNKNOWN: 15,
+            FailureReason.SETUP_DIRTY_WORKTREE: 5,
+            FailureReason.BASELINE_NOT_FAILING: 6,
+            FailureReason.BASELINE_MISMATCH: 7,
+            FailureReason.BASELINE_FLAKY: 8,
+            FailureReason.SANDBOX_ERROR: 9,
+            FailureReason.LLM_ERROR: 10,
+            FailureReason.TOOL_ERROR: 11,
+            FailureReason.TIMEOUT: 12,
+            FailureReason.AGENT_GAVE_UP: 13,
+            FailureReason.TESTS_FAILED: 14,
+            FailureReason.NO_TESTS_COLLECTED: 15,
+            FailureReason.INTERNAL_ERROR: 16,
+            FailureReason.INTERRUPTED: 17,
+            FailureReason.UNKNOWN: 18,
         }
         return precedence_order.get(self, 99)

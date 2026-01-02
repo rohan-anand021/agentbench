@@ -3,6 +3,7 @@
 Tests the run_suite function with mocked dependencies.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ import pytest
 from agentbench.suite_runner import SuiteInterrupted, run_suite
 
 
-def make_mock_task(task_id: str = "test-task-1"):
+def make_mock_task(task_id: str = "test-task-1", labels=None):
     """Create a mock TaskSpec."""
     mock_task = MagicMock()
     mock_task.id = task_id
@@ -23,6 +24,7 @@ def make_mock_task(task_id: str = "test-task-1"):
     mock_task.environment.timeout_sec = 300
     mock_task.setup.commands = ["pip install -e ."]
     mock_task.run.command = "pytest tests/"
+    mock_task.labels = labels
     return mock_task
 
 
@@ -228,6 +230,7 @@ class TestRunSuiteOutput:
         assert "task_count" in data
         assert "valid_count" in data
         assert "invalid_count" in data
+        assert "skipped_count" in data
 
     def test_creates_attempts_jsonl(self, tmp_path: Path, mock_dependencies):
         """run_suite creates attempts.jsonl file."""
@@ -300,6 +303,32 @@ class TestRunSuiteWorkspaces:
         assert workspace_dir.exists()
         assert (workspace_dir / "task-1").exists()
         assert (workspace_dir / "task-2").exists()
+
+
+class TestRunSuiteSkipping:
+    """Tests for skipping tasks by label."""
+
+    def test_skips_flaky_tasks_by_default(self, tmp_path: Path, mock_dependencies):
+        """run_suite skips tasks labeled flaky by default."""
+        tasks_root = tmp_path / "tasks"
+        tasks_root.mkdir()
+        out_dir = tmp_path / "artifacts"
+
+        tasks = [
+            make_mock_task("task-1", labels=["flaky"]),
+            make_mock_task("task-2", labels=None),
+        ]
+        mock_dependencies["load_suite"].return_value = tasks
+        mock_dependencies["validate_baseline"].return_value = (
+            make_mock_validation_result("task-2", True)
+        )
+
+        result_path = run_suite("test-suite", tasks_root, out_dir)
+
+        assert mock_dependencies["validate_baseline"].call_count == 1
+        run_json = result_path / "run.json"
+        data = json.loads(run_json.read_text())
+        assert data["skipped_count"] == 1
 
 
 class TestSuiteInterrupted:

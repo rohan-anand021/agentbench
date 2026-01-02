@@ -13,6 +13,7 @@ class DockerRunResult:
     exit_code: int
     stdout_path: Path
     stderr_path: Path
+    docker_cmd: list[str]
 
 
 class DockerSandbox:
@@ -43,14 +44,40 @@ class DockerSandbox:
         if not workspace_host_path.is_dir():
             raise ValueError("Workspace host path directory does not exist")
 
+        env_defaults = {
+            "PYTHONHASHSEED": "0",
+            "TZ": "UTC",
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        }
+
+        env_args = []
+        for key, value in env_defaults.items():
+            env_args.extend(["-e", f"{key}={value}"])
+
+        hardening_args = [
+            "--cap-drop=ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit=512",
+            "--ipc=none",
+            "--tmpfs",
+            "/tmp",
+        ]
+        readonly_args = ["--read-only"] if network == "none" else []
+
         cmd = [
             # fixed docker boilerplate
             "docker",
             "run",
             "--rm",
+            *hardening_args,
+            *readonly_args,
             # runtime configuration
             "--network",
             f"{network}",
+            *env_args,
             "-v",
             f"{workspace_host_path}:{self.workdir}",
             "-w",
@@ -104,4 +131,4 @@ class DockerSandbox:
                 exit_code = 124
 
         logger.debug("Docker command completed with exit code %d", exit_code)
-        return DockerRunResult(exit_code, stdout_path, stderr_path)
+        return DockerRunResult(exit_code, stdout_path, stderr_path, cmd)

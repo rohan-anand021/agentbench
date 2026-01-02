@@ -42,7 +42,10 @@ def mock_dependencies():
         mock_ulid.ULID.return_value = MagicMock(__str__=lambda x: "01TESTULID000000000000")
 
         mock_sandbox = MagicMock()
-        mock_sandbox.run.return_value = MagicMock(exit_code=0)
+        mock_sandbox.run.return_value = MagicMock(
+            exit_code=0,
+            docker_cmd=["docker", "run"],
+        )
         mock_sandbox_class.return_value = mock_sandbox
 
         yield {
@@ -200,8 +203,8 @@ class TestRunTaskDockerExecution:
         run_task(task_yaml, out_dir)
 
         sandbox = mock_dependencies["sandbox"]
-        # Expect two run calls: setup and task
-        assert sandbox.run.call_count == 2
+        # Expect three run calls: setup, env capture, and task
+        assert sandbox.run.call_count == 3
 
         # First call is setup (with bridge network)
         first_call = sandbox.run.call_args_list[0]
@@ -216,9 +219,9 @@ class TestRunTaskDockerExecution:
         run_task(task_yaml, out_dir)
 
         sandbox = mock_dependencies["sandbox"]
-        # Second call is task (with no network)
-        second_call = sandbox.run.call_args_list[1]
-        assert second_call.kwargs["network"] == "none"
+        # Last call is task (with no network)
+        last_call = sandbox.run.call_args_list[-1]
+        assert last_call.kwargs["network"] == "none"
 
     def test_setup_failure_raises_error(self, tmp_path: Path, mock_dependencies):
         """run_task raises error when setup fails."""

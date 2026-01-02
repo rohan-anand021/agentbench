@@ -229,14 +229,22 @@ RunParams(command="pytest -q", timeout_sec=120)
 # Returns: {
 #     "exit_code": 0,
 #     "stdout_path": "logs/tool_step_0005_stdout.txt",
-#     "stderr_path": "logs/tool_step_0005_stderr.txt"
+#     "stderr_path": "logs/tool_step_0005_stderr.txt",
+#     "stdout_truncated": false,
+#     "stderr_truncated": false
 # }
 ```
 
 **Behavior**:
 - Commands run inside Docker with `network=none`
 - stdout/stderr captured to artifact files
-- Large output is truncated to 100KB
+- Large output is truncated with metadata in the result:
+  - `stdout_truncated`, `stderr_truncated`
+  - `stdout_bytes`, `stderr_bytes`
+  - `stdout_lines`, `stderr_lines`
+  - `stdout_kept_head_lines`, `stdout_kept_tail_lines`
+  - `stderr_kept_head_lines`, `stderr_kept_tail_lines`
+- Set `AGENTBENCH_FULL_LOGS=1` to disable truncation and keep full logs.
 
 **Error Types**:
 - `timeout`: Command exceeded timeout

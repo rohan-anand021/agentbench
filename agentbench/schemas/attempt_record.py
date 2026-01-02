@@ -21,12 +21,13 @@ Versioning Strategy:
 from datetime import datetime
 
 from agentbench.scoring import FailureReason
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class TimestampInfo(BaseModel):
     model_config = ConfigDict(
         ser_json_timedelta="float",
+        json_encoders={datetime: lambda v: v.isoformat()},
     )
 
     started_at: datetime
@@ -35,7 +36,7 @@ class TimestampInfo(BaseModel):
 
 class BaselineValidationResult(BaseModel):
     attempted: bool
-    failure_as_expected: bool
+    failed_as_expected: bool
     exit_code: int
 
 
@@ -97,21 +98,17 @@ class AttemptRecord(BaseModel):
         - `TaskResult`: `passed: bool`, `exit_code: int`, `failure_reason: str | None`
     """
 
-    """
-    Missing fields from spec (`plan/spec.txt` lines 256-296):
-        - `variant: str` — agent variant name (e.g., "baseline", "context_packer")
-        - `model: ModelConfig | None` — LLM configuration snapshot
-        - `limits: LimitsConfig` — timeout configuration
-        - `schema_version: str` — for future compatibility
-    """
-
     model_config = ConfigDict(
         ser_json_timedelta="float",
+        json_encoders={datetime: lambda v: v.isoformat()},
     )
 
     run_id: str
     task_id: str
     suite: str
+    task_spec_version: str
+    harness_min_version: str | None
+    labels: list[str] | None
     timestamps: TimestampInfo
     duration_sec: float
     baseline_validation: BaselineValidationResult
@@ -120,19 +117,4 @@ class AttemptRecord(BaseModel):
     variant: str
     model: ModelConfig | None
     limits: LimitsConfig
-    record_version: str
     schema_version: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def sync_versions(cls, data):
-        if isinstance(data, dict):
-            schema_version = data.get("schema_version")
-            record_version = data.get("record_version")
-            if schema_version and record_version and schema_version != record_version:
-                raise ValueError("schema_version and record_version must match")
-            if schema_version and not record_version:
-                data["record_version"] = schema_version
-            if record_version and not schema_version:
-                data["schema_version"] = record_version
-        return data
