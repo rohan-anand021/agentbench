@@ -32,12 +32,12 @@ class OpenRouterClient(LLMClient):
         }
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=self.config.provider_config.timeout_sec,
-                headers=self._get_headers(),
-            )
-        return self._client
+        # Create a fresh client each time to avoid "Event loop is closed" errors
+        # when asyncio.run() is called multiple times (each call creates/closes a new loop)
+        return httpx.AsyncClient(
+            timeout=self.config.provider_config.timeout_sec,
+            headers=self._get_headers(),
+        )
 
     async def close(self):
         if self._client:
@@ -63,62 +63,6 @@ class OpenRouterClient(LLMClient):
         
         return body
     
-    def _parse_response(
-        self,
-        response_data: dict
-    ) -> LLMResponse:
-        """
-        {
-            "id": "gen-1766734030-5BA0srfclPVIFEk1Zb7P",
-            "object": "response",
-            "created_at": 1766734030,
-            "model": "mistralai/devstral-2512:free",
-            "status": "completed",
-            "output": [
-                {
-                "type": "message",
-                "id": "msg_tmp_6vcv7htmlkp",
-                "role": "assistant",
-                "status": "completed",
-                "content": [
-                    {
-                    "type": "output_text",
-                    "text": "Hello!",
-                    "annotations": []
-                    }
-                ]
-                }
-            ],
-            "usage": {
-                "input_tokens": 4,
-                "output_tokens": 72,
-                "total_tokens": 76,
-                "input_tokens_details": {
-                "cached_tokens": 0
-                },
-                "output_tokens_details": {
-                "reasoning_tokens": 0
-                }
-            },
-            "error": null,
-            "latency_ms": 42056,
-            "timestamp": "2025-12-26T02:27:52.372581"
-        }
-        """
-
-        return LLMResponse(
-            id = response_data.get("id"),
-            object = response_data.get("object"),
-            created_at = response_data.get("created_at"),
-            model = response_data.get("model"),
-            status = response_data.get("status"),
-            output = response_data.get("output"),
-            usage = response_data.get("usage"),
-            error = response_data.get("error"),
-            latency_ms = response_data.get("latency_ms"),
-            timestamp = response_data.get("timestamp")
-        )
-
     def _classify_error(
         self,
         status_code: int,
@@ -205,6 +149,8 @@ class OpenRouterClient(LLMClient):
                 retryable=False
             )
             raise LLMError(LLMErrorType.PROVIDER_ERROR, str(e)) from e
+        finally:
+            await client.aclose()
 
     def count_tokens(self, input_items: list[InputItem]) -> int:
         total_chars = sum(len(str(item.model_dump())) for item in input_items)

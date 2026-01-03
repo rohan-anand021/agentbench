@@ -21,8 +21,8 @@ setup:
     - pip install . --target=/workspace/site-packages
 
 run:
-  command: PYTHONPATH=/workspace/site-packages pytest -q
+  command: PYTHONPATH=/workspace/site-packages python -m pytest -q
 
 agent:
-  entrypoint: scripted
+  entrypoint: llm_v0
   max_steps: 10

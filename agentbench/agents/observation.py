@@ -86,7 +86,8 @@ def parse_test_output(
                 if path not in suggested_files:
                     suggested_files.append(path)
 
-    summary.failed_tests = list[str](dict.fromkeys(failed_tests))
+    # remove duplicates while preserving order
+    summary.failed_tests = list(dict.fromkeys(failed_tests))
     if summary.failed_tests:
         summary.failed_test_count = len(summary.failed_tests)
     else:
@@ -94,7 +95,7 @@ def parse_test_output(
         if not match:
             match = _UNITTEST_SUMMARY_PATTERN.search(output)
         summary.failed_test_count = int(match.group(1)) if match else None
-    summary.error_snippets = list[str](dict.fromkeys(error_snippets))
+    summary.error_snippets = list(dict.fromkeys(error_snippets))
     summary.suggested_files = suggested_files
     return summary
 
@@ -208,7 +209,7 @@ def build_observation(
     file_context_blocks = []
     seen_paths = set()
     remaining = max_context_chars
-    for request, result in reversed[tuple[ToolRequest, ToolResult]](state.tool_history):
+    for request, result in reversed(state.tool_history):
         if request.tool != ToolName.READ_FILE:
             continue
         path = request.params.get("path") if request.params else None

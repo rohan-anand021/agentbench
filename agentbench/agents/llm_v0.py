@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from agentbench.agents.base import Agent
+
+logger = logging.getLogger(__name__)
 from agentbench.agents.prompts.system_v1 import get_system_prompt
 from agentbench.agents.types import (
     AgentAction,
@@ -35,11 +38,21 @@ class LLMAgentV0(Agent):
         return "llm_v0"
 
     def decide(self, state: AgentState) -> AgentAction:
+        logger.debug("LLM decide called for step %d", state.step_number)
         observation = self.format_observation(state)
+        logger.debug("Observation: %s", observation[:500])
         input_items = self._build_messages(observation)
         tools = self._get_tool_definitions()
         response = self._run_completion(input_items, tools)
-        return self._parse_llm_response(response, state)
+        logger.debug("LLM response: has_tool_calls=%s, error=%s, text=%s", 
+                     response.has_tool_calls, response.error, 
+                     (response.text_content or "")[:200])
+        action = self._parse_llm_response(response, state)
+        logger.info("LLM action: decision=%s, tool=%s, stop_reason=%s",
+                    action.decision, 
+                    action.tool_request.tool if action.tool_request else None,
+                    action.stop_reason)
+        return action
 
     def format_observation(self, state: AgentState) -> str:
         lines = [
@@ -49,6 +62,9 @@ class LLMAgentV0(Agent):
             f"Time remaining (sec): {state.budget_remaining_sec:.1f}",
         ]
 
+        if state.test_command:
+            lines.append(f"Test command (use this to run tests): {state.test_command}")
+
         if state.last_test_exit_code is not None:
             lines.append(f"Last test exit code: {state.last_test_exit_code}")
 
@@ -56,8 +72,38 @@ class LLMAgentV0(Agent):
             lines.append("Last test output:")
             lines.append(state.last_test_output)
 
+        # Include tool history so the LLM can see results of previous actions
+        if state.tool_history:
+            lines.append("\n--- Previous Actions ---")
+            # Show recent tool calls (limit to last 10 to avoid context overflow)
+            recent_history = state.tool_history[-10:]
+            for request, result in recent_history:
+                lines.append(f"\n[{request.tool.value}] {json.dumps(request.params)}")
+                if result.data:
+                    # Format the result data nicely
+                    if "output" in result.data:
+                        lines.append(f"Result: {result.data['output'][:2000]}")
+                    elif "files" in result.data:
+                        lines.append(f"Files: {result.data['files']}")
+                    elif "matches" in result.data:
+                        matches = result.data["matches"]
+                        if isinstance(matches, list):
+                            lines.append(f"Matches ({len(matches)} results):")
+                            for match in matches[:5]:  # Limit matches shown
+                                lines.append(f"  {match}")
+                        else:
+                            lines.append(f"Matches: {str(matches)[:1000]}")
+                    elif "combined_output" in result.data:
+                        lines.append(f"Output:\n{result.data['combined_output'][:2000]}")
+                    elif "content" in result.data:
+                        lines.append(f"Content:\n{result.data['content'][:3000]}")
+                    else:
+                        lines.append(f"Result: {str(result.data)[:1000]}")
+                elif result.error:
+                    lines.append(f"Error: {result.error.message}")
+
         if state.patches_applied:
-            lines.append("Patches applied:")
+            lines.append("\nPatches applied:")
             lines.extend(state.patches_applied[-5:])
 
         return "\n".join(lines).strip()
@@ -207,14 +253,10 @@ class LLMAgentV0(Agent):
         async def _call() -> LLMResponse:
             return await self.client.complete(input_items=input_items, tools=tools)
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(_call())
-
-        if loop.is_running():
-            raise RuntimeError("LLM client called from running event loop.")
-        return loop.run_until_complete(_call())
+        # Always use asyncio.run() to get a fresh event loop for each call.
+        # This avoids issues with closed/stale loops since we create a fresh
+        # httpx client for each request anyway.
+        return asyncio.run(_call())
 
     def _next_request_id(self, state: AgentState) -> str:
         self._request_counter += 1

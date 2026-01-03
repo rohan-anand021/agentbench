@@ -1,11 +1,16 @@
 import logging
+import os
+import shutil
 from pathlib import Path
 
 import typer
+from pydantic import SecretStr
 from rich.console import Console
 from rich.table import Table
 
 from agentbench.agent_runner import run_agent_attempt
+from agentbench.llm.config import LLMConfig, LLMProvider, ProviderConfig
+from agentbench.llm.openrouter import OpenRouterClient
 from agentbench.logging import setup_logging
 from agentbench.run_task import run_task
 from agentbench.schemas.attempt_record import AttemptRecord
@@ -111,15 +116,44 @@ def run_agent_cmd(
         workspace_dir = out_dir / "workspace" / task.id
         artifacts_dir = out_dir / "agent_runs" / task.id
         
+        # Auto-clean workspace from previous runs to avoid git clone conflicts
+        if workspace_dir.exists():
+            logger.debug("Cleaning up existing workspace at %s", workspace_dir)
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+        
         workspace_dir.mkdir(parents=True, exist_ok=True)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         
         console.print(f"[bold blue]Running agent '{variant}' on task '{task.id}'...[/bold blue]")
         
+        llm_config = None
+        llm_client = None
+
+        if variant == "llm_v0":
+            api_key_str = os.getenv("OPENROUTER_API_KEY")
+            if not api_key_str:
+                console.print("[red]Error: OPENROUTER_API_KEY environment variable is required for llm_v0[/red]")
+                raise typer.Exit(code=1)
+            
+            model_name = os.getenv("MODEL_NAME", "anthropic/claude-3.5-sonnet")
+            
+            llm_config = LLMConfig(
+                provider_config=ProviderConfig(
+                    provider=LLMProvider.OPENROUTER,
+                    model_name=model_name,
+                    api_key=SecretStr(api_key_str),
+                    timeout_sec=120
+                )
+            )
+            llm_client = OpenRouterClient(config=llm_config)
+
         record = run_agent_attempt(
             task=task,
             workspace_dir=workspace_dir,
             artifacts_dir=artifacts_dir,
+            llm_config=llm_config,
+            llm_client=llm_client,
+            variant_override=variant,
         )
         
         print_agent_summary(record)

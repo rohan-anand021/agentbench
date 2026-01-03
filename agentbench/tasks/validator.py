@@ -229,11 +229,13 @@ def validate_baseline(
                 setup_commands = (
                     f"cd {repo_relative_path} && {setup_commands}"
                 )
+                # Give more time for setup (pip installs can be slow)
+                setup_timeout = max(task.environment.timeout_sec, 180)
                 setup_run_result = sandbox.run(
                     workspace_host_path=workspace_dir,
                     command=setup_commands,
                     network="bridge",
-                    timeout_sec=task.environment.timeout_sec,
+                    timeout_sec=setup_timeout,
                     stdout_path=setup_stdout_path,
                     stderr_path=setup_stderr_path,
                 )

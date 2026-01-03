@@ -13,6 +13,9 @@ class EventType(StrEnum):
     PATCH_APPLIED = "patch_applied"
     TESTS_STARTED = "tests_started"
     TESTS_FINISHED = "tests_finished"
+    # Command events (for non-test shell commands)
+    COMMAND_STARTED = "command_started"
+    COMMAND_FINISHED = "command_finished"
     TASK_STARTED = "task_started"
     TASK_FINISHED = "task_finished"
     LLM_REQUEST_STARTED = "llm_request_started"

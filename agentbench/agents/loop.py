@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 import ulid
 
 from agentbench.agents.base import Agent
+
+logger = logging.getLogger(__name__)
 from agentbench.agents.types import (
     AgentAction,
     AgentBudget,
@@ -89,11 +92,15 @@ class AgentLoop:
             last_test_output=output,
             budget_remaining_steps=self.budget.max_steps,
             budget_remaining_sec=self.budget.max_time_sec,
+            test_command=self.task.run.command,
         )
 
         while True:
+            logger.debug("Loop iteration: step=%d, budget_steps=%d", 
+                         state.step_number, state.budget_remaining_steps)
             stop_reason = self._check_stop_conditions(state)
             if stop_reason:
+                logger.info("Loop exiting: stop_reason=%s", stop_reason)
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
                 ).total_seconds()
@@ -110,8 +117,10 @@ class AgentLoop:
                 )
 
             try:
+                logger.debug("Calling agent.decide() for step %d", state.step_number)
                 action = self.agent.decide(state)
-            except Exception:
+            except Exception as e:
+                logger.error("agent.decide() raised exception: %s", e, exc_info=True)
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
                 ).total_seconds()
@@ -127,6 +136,7 @@ class AgentLoop:
 
             if action.decision == AgentDecision.STOP:
                 reason = action.stop_reason or StopReason.AGENT_GAVE_UP
+                logger.info("Agent decided to STOP: reason=%s", reason)
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
                 ).total_seconds()
@@ -143,6 +153,7 @@ class AgentLoop:
                 )
 
             if action.tool_request is None:
+                logger.error("CALL_TOOL but tool_request is None")
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
                 ).total_seconds()
@@ -156,7 +167,9 @@ class AgentLoop:
                     final_test_passed=False,
                 )
 
+            logger.debug("Executing tool: %s", action.tool_request.tool)
             result = self._execute_tool(action.tool_request)
+            logger.debug("Tool result: status=%s", result.status)
             state = self._update_state(state, action, result)
             if result.status == ToolStatus.ERROR:
                 is_expected_test_failure = (
@@ -178,8 +191,10 @@ class AgentLoop:
                         final_test_passed=False,
                     )
 
+            # Only count success when the actual TEST command passes, not arbitrary shell commands
             if action.tool_request.tool == ToolName.RUN:
-                if result.exit_code == 0:
+                is_test = result.data.get("is_test_command", False) if result.data else False
+                if is_test and result.exit_code == 0:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
                     ).total_seconds()
@@ -198,17 +213,34 @@ class AgentLoop:
         stdout_path = logs_dir / "step_0001_stdout.txt"
         stderr_path = logs_dir / "step_0001_stderr.txt"
 
-        command = self.task.run.command
+        # Build command with setup + test in single container run
+        # All commands should run from repo directory
+        command_parts = []
         if self.repo_root != self.workspace_root:
-            command = f"cd repo && {command}"
+            command_parts.append("cd repo")
+        
+        # Add setup commands if present (run in same container)
+        if self.task.setup and self.task.setup.commands:
+            command_parts.extend(self.task.setup.commands)
+        
+        # Add the test command
+        command_parts.append(self.task.run.command)
+        
+        command = " && ".join(command_parts)
 
-        self.event_logger.log_tests_started(command=command)
+        self.event_logger.log_tests_started(command=self.task.run.command)
 
+        # Use bridge network if setup commands need network (for pip install)
+        needs_network = self.task.setup and self.task.setup.commands
+        # Give more time when running setup commands (pip install can be slow)
+        timeout = self.task.environment.timeout_sec
+        if needs_network:
+            timeout = max(timeout, 180)  # At least 3 minutes for setup
         result = self.sandbox.run(
             workspace_host_path=self.workspace_root,
             command=command,
-            network="none",
-            timeout_sec=self.task.environment.timeout_sec,
+            network="bridge" if needs_network else "none",
+            timeout_sec=timeout,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
         )
@@ -259,7 +291,12 @@ class AgentLoop:
                     )
             elif request.tool == ToolName.RUN:
                 params = RunParams(**request.params)
-                self.event_logger.log_tests_started(command=params.command)
+                # Check if this is the actual test command or just a shell command
+                is_test_command = self._is_test_command(params.command)
+                if is_test_command:
+                    self.event_logger.log_tests_started(command=params.command)
+                else:
+                    self.event_logger.log_command_started(command=params.command)
                 result = run_tool(
                     workspace_root=self.repo_root,
                     params=params,
@@ -275,12 +312,22 @@ class AgentLoop:
                 if result.data is None:
                     result.data = {}
                 result.data["combined_output"] = output
-                self.event_logger.log_tests_finished(
-                    exit_code=result.exit_code or -1,
-                    passed=(result.exit_code == 0),
-                    stdout_path=result.stdout_path,
-                    stderr_path=result.stderr_path,
-                )
+                result.data["is_test_command"] = is_test_command
+                # Fix: use ternary to handle exit_code=0 correctly (0 or -1 evaluates to -1!)
+                exit_code = result.exit_code if result.exit_code is not None else -1
+                if is_test_command:
+                    self.event_logger.log_tests_finished(
+                        exit_code=exit_code,
+                        passed=(result.exit_code == 0),
+                        stdout_path=result.stdout_path,
+                        stderr_path=result.stderr_path,
+                    )
+                else:
+                    self.event_logger.log_command_finished(
+                        exit_code=exit_code,
+                        stdout_path=result.stdout_path,
+                        stderr_path=result.stderr_path,
+                    )
             else:
                 raise ValueError(f"Unknown tool: {request.tool}")
         except Exception as exc:
@@ -379,6 +426,7 @@ class AgentLoop:
             last_test_output=last_test_output,
             budget_remaining_steps=budget_remaining_steps,
             budget_remaining_sec=budget_remaining_sec,
+            test_command=state.test_command,
         )
 
     def _read_and_truncate_output(
@@ -400,3 +448,18 @@ class AgentLoop:
             return ""
         truncated, _ = truncate_output(combined)
         return truncated
+
+    def _is_test_command(self, command: str) -> bool:
+        """Check if a command is the actual test command (or contains it).
+        
+        This prevents the agent from "cheating" by running arbitrary commands
+        like `find` or `ls` that return exit code 0 and triggering false success.
+        """
+        test_cmd = self.task.run.command
+        # Normalize whitespace for comparison
+        cmd_normalized = " ".join(command.split())
+        test_normalized = " ".join(test_cmd.split())
+        
+        # Check if command is or contains the test command
+        # (agent might add cd prefix or other setup)
+        return test_normalized in cmd_normalized or cmd_normalized == test_normalized

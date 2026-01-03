@@ -6,7 +6,10 @@ import ulid
 
 from agentbench.agents.base import Agent
 from agentbench.agents.llm_v0 import LLMAgentV0
+from agentbench.agents.loop import AgentLoop
 from agentbench.agents.scripted import ScriptedAgent
+from agentbench.llm.client import LLMClient
+from agentbench.llm.config import LLMConfig
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.schemas.attempt_record import (
     AttemptRecord,
@@ -18,6 +21,7 @@ from agentbench.schemas.attempt_record import (
 from agentbench.scoring import FailureReason
 from agentbench.tasks.models import TaskSpec
 from agentbench.tasks.validator import validate_baseline
+from agentbench.util.events import EventLogger
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,10 @@ logger = logging.getLogger(__name__)
 def run_agent_attempt(
     task: TaskSpec,
     workspace_dir: Path,
-    artifacts_dir: Path
+    artifacts_dir: Path,
+    llm_config: LLMConfig | None = None,
+    llm_client: LLMClient | None = None,
+    variant_override: str | None = None,
     ) -> AttemptRecord:
     """
     Run an agent attempt on a task.
@@ -46,23 +53,20 @@ def run_agent_attempt(
     validation_result = None
     failure_reason = None
     exit_code = -1
+    entrypoint = variant_override or task.agent.entrypoint
 
     def get_agent(
         entrypoint: str,
         run_id: str,
     ) -> Agent:
-        agents = {
-            "scripted": ScriptedAgent,
-            "llm_v0": LLMAgentV0,
-        }
-
-        if entrypoint not in agents:
+        if entrypoint == "scripted":
+            return ScriptedAgent(run_id=run_id)
+        elif entrypoint == "llm_v0":
+            if not llm_config or not llm_client:
+                raise ValueError("llm_v0 requires LLM config and client")
+            return LLMAgentV0(config=llm_config, client=llm_client)
+        else:
             raise ValueError(f"Unknown agent entrypoint: {entrypoint}")
-
-        if entrypoint == "llm_v0":
-            raise ValueError("llm_v0 requires LLM config and client")
-
-        return agents[entrypoint](run_id=run_id)
 
     try:
         logger.debug("Creating Docker sandbox with image %s", task.environment.docker_image)
@@ -84,19 +88,35 @@ def run_agent_attempt(
                 "baseline validation passed unexpectedly - task is invalid"
             )
 
-        logger.debug("Instantiating agent with entrypoint %s", task.agent.entrypoint)
+        logger.debug("Instantiating agent with entrypoint %s", entrypoint)
         agent = get_agent(
-            entrypoint = task.agent.entrypoint,
+            entrypoint = entrypoint,
             run_id = run_id
         )
 
-        result = agent.run(
-            task = task,
-            sandbox = sandbox,
-            workspace_root = workspace_dir,
-            artifacts_dir = artifacts_dir,
-            failing_output = validation_result.stderr_path.read_text() if validation_result.stderr_path else ""
-        )
+        if isinstance(agent, ScriptedAgent):
+            result = agent.run(
+                task = task,
+                sandbox = sandbox,
+                workspace_root = workspace_dir,
+                artifacts_dir = artifacts_dir,
+                failing_output = validation_result.stderr_path.read_text() if validation_result.stderr_path else ""
+            )
+        else:
+            # Use AgentLoop for other agents (like llm_v0)
+            event_logger = EventLogger(
+                run_id=run_id,
+                events_file=artifacts_dir / "events.jsonl"
+            )
+            loop = AgentLoop(
+                agent=agent,
+                task=task,
+                workspace_root=workspace_dir,
+                artifacts_dir=artifacts_dir,
+                sandbox=sandbox,
+                event_logger=event_logger
+            )
+            result = loop.run()
 
         exit_code = result.final_test_exit_code if result else -1
 
@@ -141,7 +161,7 @@ def run_agent_attempt(
         artifact_paths = {
             "patch_files": ",".join(result.patches_applied) if result else ""
         },
-        variant = "baseline",
+        variant = entrypoint,
         model = None,
         limits = LimitsConfig(
             timeout_sec = task.environment.timeout_sec,

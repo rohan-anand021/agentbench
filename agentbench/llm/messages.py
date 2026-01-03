@@ -57,7 +57,15 @@ class OutputFunctionCall(BaseModel):
     name: str
     arguments: str
 
-OutputItem = OutputMessage | OutputFunctionCall
+
+class OutputReasoning(BaseModel):
+    """Reasoning/chain-of-thought output from models like o3, grok, deepseek."""
+    type: Literal["reasoning"] = "reasoning"
+    id: str | None = None
+    content: list[Any] | str | None = None  # Can be text or structured content
+
+
+OutputItem = OutputMessage | OutputFunctionCall | OutputReasoning
 
 class InputTokensDetails(BaseModel):
     cached_tokens: int = 0
@@ -79,7 +87,7 @@ class LLMResponse(BaseModel):
     created_at: int
     model: str
     status: str = "completed"
-    output: list[OutputMessage | OutputFunctionCall]
+    output: list[OutputMessage | OutputFunctionCall | OutputReasoning]
     usage: TokenUsage | None = None
     error: dict[str, Any] | None = None
     latency_ms: int = 0

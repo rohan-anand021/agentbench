@@ -330,3 +330,290 @@ def test_build_observation_respects_budget():
 
     assert len(context_body) <= 300
     assert "[truncated]" in context_body
+
+
+# Additional tests for full coverage
+
+
+def test_parse_test_output_empty_returns_default_summary():
+    """Test line 58: empty output returns immediately."""
+    summary = parse_test_output("", exit_code=1)
+    assert summary.exit_code == 1
+    assert summary.failed_tests == []
+    assert summary.error_snippets == []
+
+
+def test_parse_unittest_failure_pattern():
+    """Test line 74: unittest-style failure parsing."""
+    output = """
+FAIL: test_add (tests.test_math.TestMath)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/test_math.py", line 10, in test_add
+    self.assertEqual(add(1, 2), 4)
+AssertionError: 3 != 4
+""".strip()
+    summary = parse_test_output(output, exit_code=1)
+
+    assert "test_add (tests.test_math.TestMath)" in summary.failed_tests
+
+
+def test_parse_unittest_error_pattern():
+    """Test unittest ERROR line parsing."""
+    output = """
+ERROR: test_div (tests.test_math.TestMath)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/test_math.py", line 15, in test_div
+    div(1, 0)
+ZeroDivisionError: division by zero
+""".strip()
+    summary = parse_test_output(output, exit_code=1)
+
+    assert "test_div (tests.test_math.TestMath)" in summary.failed_tests
+
+
+def test_parse_summary_pattern_when_no_failed_tests_pytest():
+    """Test lines 94-97: fallback to summary pattern when no failed tests parsed."""
+    output = """
+==================================== short test summary info ====================================
+5 failed, 10 passed in 0.5s
+""".strip()
+    summary = parse_test_output(output, exit_code=1)
+
+    # No FAILED lines matched, but summary pattern should extract count
+    assert summary.failed_test_count == 5
+
+
+def test_parse_summary_pattern_unittest():
+    """Test line 96: unittest summary pattern fallback."""
+    # This output has no FAILED lines that match test names, 
+    # but has the unittest summary with failure count
+    output = """
+----------------------------------------------------------------------
+Ran 15 tests in 0.100s
+
+failures=3
+""".strip()
+    summary = parse_test_output(output, exit_code=1)
+
+    # No failed_tests found, so fallback to summary pattern
+    assert summary.failed_test_count == 3
+    assert summary.failed_tests == []
+
+
+def test_truncate_output_empty_content():
+    """Test line 125: empty content returns immediately."""
+    result, was_truncated = truncate_output("")
+    assert result == ""
+    assert was_truncated is False
+
+
+def test_truncate_output_very_small_max_chars():
+    """Test line 144: max_chars smaller than marker length."""
+    content = "a" * 100
+    # Marker is about 20 chars, use smaller max
+    result, was_truncated = truncate_output(content, max_chars=10)
+    assert was_truncated is True
+    assert len(result) <= 10
+
+
+def test_truncate_output_chars_after_line_truncation():
+    """Test lines 142-148: char truncation after line truncation."""
+    # Create content with many lines
+    content = "\n".join(f"{'x' * 100} line {i}" for i in range(200))
+    result, was_truncated = truncate_output(
+        content,
+        max_lines=100,
+        max_chars=500,
+        keep_head=20,
+        keep_tail=20,
+    )
+    assert was_truncated is True
+    assert len(result) <= 500
+    assert "[truncated]" in result
+
+
+def test_format_tool_result_no_data():
+    """Test line 160: tool result with no data."""
+    result = make_tool_result(ToolName.LIST_FILES, data=None)
+    summary = format_tool_result_summary(result)
+    assert summary == "list_files → SUCCESS"
+
+
+def test_format_tool_result_read_file_no_total_lines():
+    """Test line 169: read_file with no total_lines in data."""
+    result = make_tool_result(ToolName.READ_FILE, data={"content": "hello"})
+    summary = format_tool_result_summary(result)
+    assert "read_file → read" in summary
+
+
+def test_format_tool_result_search_no_total_matches():
+    """Test line 172: search with no total_matches in data."""
+    result = make_tool_result(ToolName.SEARCH, data={"matches": []})
+    summary = format_tool_result_summary(result)
+    assert "search → searched" in summary
+
+
+def test_format_tool_result_apply_patch_no_changed_files():
+    """Test line 175: apply_patch with empty changed_files."""
+    result = make_tool_result(ToolName.APPLY_PATCH, data={"changed_files": []})
+    summary = format_tool_result_summary(result)
+    assert "apply_patch → patched" in summary
+
+
+def test_format_tool_result_long_summary_truncated():
+    """Test lines 181-182: summary exceeding max_data_chars is truncated."""
+    result = make_tool_result(
+        ToolName.APPLY_PATCH,
+        data={"changed_files": ["file_" + str(i) + ".py" for i in range(100)]},
+    )
+    summary = format_tool_result_summary(result, max_data_chars=50)
+    assert len(summary) <= 50
+    assert summary.endswith("...")
+
+
+def test_build_observation_no_file_context():
+    """Test that observation without file context doesn't include File Context section."""
+    state = make_state(
+        tool_history=[],
+        last_test_output="FAILED tests/test.py::test_one",
+        last_test_exit_code=1,
+    )
+    observation = build_observation(
+        state,
+        task_description="Fix bug",
+        test_command="pytest",
+    )
+    assert "## File Context" not in observation
+
+
+def test_build_observation_skips_duplicate_paths():
+    """Test line 217: duplicate paths are skipped."""
+    tool_history = [
+        (
+            make_tool_request(ToolName.READ_FILE, {"path": "src/main.py"}),
+            make_tool_result(
+                ToolName.READ_FILE,
+                data={"content": "def foo(): pass", "total_lines": 1},
+            ),
+        ),
+        (
+            make_tool_request(ToolName.READ_FILE, {"path": "src/main.py"}),
+            make_tool_result(
+                ToolName.READ_FILE,
+                data={"content": "def bar(): pass", "total_lines": 1},
+            ),
+        ),
+    ]
+    state = make_state(tool_history=tool_history, last_test_exit_code=1)
+    observation = build_observation(state, "Fix", "pytest")
+    # Should only appear once
+    assert observation.count("### src/main.py") == 1
+
+
+def test_build_observation_skips_no_path():
+    """Test line 216-217: entries with no path are skipped."""
+    tool_history = [
+        (
+            make_tool_request(ToolName.READ_FILE, {}),  # No path
+            make_tool_result(
+                ToolName.READ_FILE,
+                data={"content": "hello"},
+            ),
+        ),
+    ]
+    state = make_state(tool_history=tool_history, last_test_exit_code=1)
+    observation = build_observation(state, "Fix", "pytest")
+    assert "## File Context" not in observation
+
+
+def test_build_observation_skips_no_content():
+    """Test lines 218-219: entries with no content in data are skipped."""
+    tool_history = [
+        (
+            make_tool_request(ToolName.READ_FILE, {"path": "src/empty.py"}),
+            make_tool_result(
+                ToolName.READ_FILE,
+                data={"total_lines": 0},  # No "content" key
+            ),
+        ),
+    ]
+    state = make_state(tool_history=tool_history, last_test_exit_code=1)
+    observation = build_observation(state, "Fix", "pytest")
+    assert "## File Context" not in observation
+
+
+def test_build_observation_stops_when_budget_exhausted():
+    """Test lines 223-224, 227-228: loop stops when remaining budget is exhausted."""
+    # Create large content that will exceed remaining budget
+    tool_history = [
+        (
+            make_tool_request(ToolName.READ_FILE, {"path": f"src/file{i}.py"}),
+            make_tool_result(
+                ToolName.READ_FILE,
+                data={"content": "x" * 500, "total_lines": 10},
+            ),
+        )
+        for i in range(10)
+    ]
+    state = make_state(tool_history=tool_history, last_test_exit_code=1)
+    observation = build_observation(state, "Fix", "pytest", max_context_chars=200)
+    # Should only include some files due to budget
+    assert "## File Context" in observation
+
+
+def test_build_observation_passing_tests():
+    """Test observation shows PASSING when exit code is 0."""
+    state = make_state(last_test_exit_code=0)
+    observation = build_observation(state, "Task", "pytest")
+    assert "PASSING" in observation
+
+
+def test_extract_file_hints_empty_nodeid():
+    """Test that empty file parts are handled correctly."""
+    summary = TestFailureSummary(
+        exit_code=1,
+        failed_tests=["::test_one"],  # Empty file part before ::
+        suggested_files=[],
+    )
+    hints = extract_file_hints(summary)
+    # Empty file part should not be added
+    assert "" not in hints
+
+
+def test_format_tool_result_error_with_error_type():
+    """Test error result with specific error type."""
+    now = datetime.now(timezone.utc)
+    from agentbench.tools.contract import ToolError
+    result = ToolResult(
+        request_id="req-1",
+        tool=ToolName.APPLY_PATCH,
+        status=ToolStatus.ERROR,
+        started_at=now,
+        ended_at=now,
+        duration_sec=0.01,
+        error=ToolError(
+            error_type="patch_conflict",
+            message="Patch failed to apply",
+            details={},
+        ),
+    )
+    summary = format_tool_result_summary(result)
+    assert "ERROR (patch_conflict)" in summary
+
+
+def test_format_tool_result_error_no_error_object():
+    """Test error result without error object."""
+    now = datetime.now(timezone.utc)
+    result = ToolResult(
+        request_id="req-1",
+        tool=ToolName.APPLY_PATCH,
+        status=ToolStatus.ERROR,
+        started_at=now,
+        ended_at=now,
+        duration_sec=0.01,
+        error=None,
+    )
+    summary = format_tool_result_summary(result)
+    assert "ERROR (error)" in summary

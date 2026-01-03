@@ -37,6 +37,7 @@ class AgentState(BaseModel):
     last_test_output: str | None = None
     budget_remaining_steps: int
     budget_remaining_sec: float
+    test_command: str | None = None
 
 
 class AgentResult(BaseModel):

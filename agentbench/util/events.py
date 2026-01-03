@@ -13,10 +13,16 @@ logger = logging.getLogger(__name__)
 class EventLogger:
     """Logs events to events.jsonl during an agent run."""
 
-    def __init__(self, run_id: str, events_file: Path):
+    def __init__(self, run_id: str, events_file: Path, clear_existing: bool = True):
         self.run_id = run_id
         self.events_file = events_file
         self._step_counter = 0
+        
+        # Clear existing events file at start of new run to avoid accumulation
+        if clear_existing and events_file.exists():
+            events_file.unlink()
+            logger.debug("Cleared existing events file %s", events_file)
+        
         logger.debug("EventLogger initialized for run %s, writing to %s", run_id, events_file)
 
     def next_step_id(self) -> int:
@@ -103,6 +109,26 @@ class EventLogger:
             },
         )
 
+    def log_command_started(self, command: str) -> None:
+        """Log when a non-test shell command begins."""
+        self.log(event_type=EventType.COMMAND_STARTED, payload={"command": command})
+
+    def log_command_finished(
+        self,
+        exit_code: int,
+        stdout_path: str | None = None,
+        stderr_path: str | None = None,
+    ) -> None:
+        """Log when a non-test shell command finishes."""
+        self.log(
+            event_type=EventType.COMMAND_FINISHED,
+            payload={
+                "exit_code": exit_code,
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+            },
+        )
+
     def log_llm_request_started(
         self,
         model: str,
@@ -161,6 +187,8 @@ class NullEventLogger:
     def log_patch_applied(self, step_id: int, changed_files: list[str], patch_artifact_path: str) -> None: pass
     def log_tests_started(self, command: str) -> None: pass
     def log_tests_finished(self, exit_code: int, passed: bool, stdout_path: str | None = None, stderr_path: str | None = None) -> None: pass
+    def log_command_started(self, command: str) -> None: pass
+    def log_command_finished(self, exit_code: int, stdout_path: str | None = None, stderr_path: str | None = None) -> None: pass
     def log_llm_request_started(self, model: str, message_count: int, has_tools: bool) -> None: pass
     def log_llm_request_finished(self, request_id: str, status: str, latency_ms: int, tokens_used: int, has_tool_calls: bool) -> None: pass
     def log_llm_request_failed(self, error_type: str, message: str, retryable: bool) -> None: pass
