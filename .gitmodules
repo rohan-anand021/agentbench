@@ -1,0 +1,3 @@
+[submodule "external/python-ai-sdk-sdk"]
+	path = external/python-ai-sdk-sdk
+	url = https://github.com/python-ai-sdk/sdk.git
