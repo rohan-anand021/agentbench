@@ -1,19 +1,11 @@
 import logging
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
+from agentbench.sandbox.models import DockerRunResult
 from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class DockerRunResult:
-    exit_code: int
-    stdout_path: Path
-    stderr_path: Path
-    docker_cmd: list[str]
 
 
 class DockerSandbox:
@@ -30,7 +22,7 @@ class DockerSandbox:
         stdout_path,
         stderr_path,
     ):
-        # bash -lc - command
+        # shell -c <command>
         # network - --network <network>
 
         if network not in ["none", "bridge"]:
@@ -85,8 +77,8 @@ class DockerSandbox:
             # image selection
             self.image,
             # command inside container
-            "bash",
-            "-lc",
+            "sh",
+            "-c",
             command,
         ]
 

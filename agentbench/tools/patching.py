@@ -2,7 +2,6 @@ import logging
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -13,23 +12,10 @@ from agentbench.tools.contract import (
     ToolResult,
     ToolStatus,
 )
+from agentbench.tools.patch_models import FilePatch, PatchHunk
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class PatchHunk:
-    old_start: int
-    old_count: int
-    new_start: int
-    new_count: int
-    lines: list[str]
-
-@dataclass
-class FilePatch:
-    old_path: str | None
-    new_path: str | None
-    hunks: list[PatchHunk]
 
 def parse_unified_diff(patch_txt: str) -> list[FilePatch]:
     """

@@ -149,5 +149,5 @@ class AttemptContext:
         attempts_file = self.logs_dir.parent / "attempts.jsonl"
 
         logger.info("Writing attempt record for run %s, valid=%s, exit_code=%s", self.run_id, self.valid, self.exit_code)
-        append_jsonl(attempts_file, attempt_record.model_dump(mode="json"))
+        append_jsonl(attempts_file, attempt_record.model_dump_json())
         return False

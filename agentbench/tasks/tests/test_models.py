@@ -1,5 +1,6 @@
 """Unit tests for Task Pydantic models."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ class TestRepoSpec:
     def test_repo_spec_serialization(self):
         """RepoSpec serializes to JSON correctly."""
         repo = RepoSpec(url="https://github.com/example/repo.git", commit="abc123")
-        json_data = repo.model_dump(mode="json")
+        json_data = json.loads(repo.model_dump_json())
 
         assert json_data["url"] == "https://github.com/example/repo.git"
         assert json_data["commit"] == "abc123"
@@ -197,14 +198,14 @@ class TestTaskSpec:
     def test_task_spec_source_path_serializes_to_string(self):
         """TaskSpec source_path serializes to string in JSON."""
         task = self.make_valid_task_spec()
-        json_data = task.model_dump(mode="json")
+        json_data = json.loads(task.model_dump_json())
         assert isinstance(json_data["source_path"], str)
         assert "task.yaml" in json_data["source_path"]
 
     def test_task_spec_round_trip(self):
         """TaskSpec can be serialized and deserialized."""
         original = self.make_valid_task_spec()
-        json_data = original.model_dump(mode="json")
+        json_data = json.loads(original.model_dump_json())
         restored = TaskSpec.model_validate(json_data)
 
         assert restored.id == original.id
@@ -262,7 +263,7 @@ class TestValidationResult:
             duration_sec=45.5,
         )
 
-        json_data = result.model_dump(mode="json")
+        json_data = json.loads(result.model_dump_json())
         assert isinstance(json_data["stdout_path"], str)
         assert isinstance(json_data["stderr_path"], str)
 

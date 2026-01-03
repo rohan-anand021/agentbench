@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import re
+import time
 from pathlib import Path
 
 from agentbench.sandbox.docker_sandbox import DockerSandbox
@@ -17,6 +18,29 @@ from agentbench.util.git import (
 from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_repo_url(repo_url: str, task_source_path: Path) -> str:
+    if repo_url.startswith("file://"):
+        return repo_url
+
+    path_candidate = Path(repo_url)
+    if path_candidate.is_absolute():
+        return str(path_candidate)
+
+    if repo_url.startswith("."):
+        return str((task_source_path.parent / repo_url).resolve())
+
+    base = task_source_path.parent.resolve()
+    while True:
+        candidate = base / repo_url
+        if candidate.exists():
+            return str(candidate.resolve())
+        if base == base.parent:
+            break
+        base = base.parent
+
+    return repo_url
 
 
 def _read_log(path: Path | None) -> str:
@@ -134,6 +158,7 @@ def validate_baseline(
     repo_dir = ensure_dir(workspace_dir / "repo")
     stdout_path = None
     stderr_path = None
+    start_time = time.monotonic()
 
     with AttemptContext(
         task=task, logs_dir=logs_dir, variant="baseline"
@@ -142,8 +167,16 @@ def validate_baseline(
             # git clone
             attempt.mark_stage(stage="git_clone")
 
+            repo_url = _resolve_repo_url(task.repo.url, task.source_path)
+            if repo_url != task.repo.url:
+                logger.info(
+                    "Resolved repo URL from %s to %s",
+                    task.repo.url,
+                    repo_url,
+                )
+
             stdout_path, stderr_path, exit_code = clone_repo(
-                url=task.repo.url, dest=repo_dir, logs_dir=logs_dir
+                url=repo_url, dest=repo_dir, logs_dir=logs_dir
             )
 
             attempt.set_exit_code(exit_code)
@@ -184,26 +217,43 @@ def validate_baseline(
 
             setup_commands = " && ".join(task.setup.commands)
             repo_relative_path = "repo"
-            setup_commands = f"cd {repo_relative_path} && {setup_commands}"
 
             logger.info("Running setup commands")
             logger.debug("Setup commands: %s", setup_commands)
 
             # setup run
             attempt.mark_stage(stage="setup")
+            setup_stdout_path = Path(logs_dir, "setup_stdout.txt")
+            setup_stderr_path = Path(logs_dir, "setup_stderr.txt")
+            if setup_commands.strip():
+                setup_commands = (
+                    f"cd {repo_relative_path} && {setup_commands}"
+                )
+                setup_run_result = sandbox.run(
+                    workspace_host_path=workspace_dir,
+                    command=setup_commands,
+                    network="bridge",
+                    timeout_sec=task.environment.timeout_sec,
+                    stdout_path=setup_stdout_path,
+                    stderr_path=setup_stderr_path,
+                )
 
-            setup_run_result = sandbox.run(
-                workspace_host_path=workspace_dir,
-                command=setup_commands,
-                network="bridge",
-                timeout_sec=task.environment.timeout_sec,
-                stdout_path=Path(logs_dir, "setup_stdout.txt"),
-                stderr_path=Path(logs_dir, "setup_stderr.txt"),
-            )
-
-            exit_code = setup_run_result.exit_code
-            stdout_path = setup_run_result.stdout_path
-            stderr_path = setup_run_result.stderr_path
+                exit_code = setup_run_result.exit_code
+                stdout_path = setup_run_result.stdout_path
+                stderr_path = setup_run_result.stderr_path
+            else:
+                logger.info("No setup commands provided; skipping setup")
+                setup_stdout_path.write_text(
+                    "Setup skipped: no commands provided.\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                setup_stderr_path.write_text(
+                    "", encoding="utf-8", newline="\n"
+                )
+                exit_code = 0
+                stdout_path = setup_stdout_path
+                stderr_path = setup_stderr_path
 
             attempt.set_exit_code(exit_code)
             attempt.add_artifact("setup_stdout", str(stdout_path))
@@ -343,62 +393,82 @@ def validate_baseline(
             )
 
             attempt.mark_stage(stage="baseline_rerun")
-            rerun_stdout = Path(logs_dir, "run_rerun_stdout.txt")
-            rerun_stderr = Path(logs_dir, "run_rerun_stderr.txt")
-            rerun_result = sandbox.run(
-                workspace_host_path=workspace_dir,
-                command=run_cmd,
-                network="none",
-                timeout_sec=task.environment.timeout_sec,
-                stdout_path=rerun_stdout,
-                stderr_path=rerun_stderr,
-            )
+            elapsed = time.monotonic() - start_time
+            remaining = task.environment.timeout_sec - elapsed
+            min_rerun_budget = 5
 
-            attempt.add_artifact("run_rerun_stdout", str(rerun_stdout))
-            attempt.add_artifact("run_rerun_stderr", str(rerun_stderr))
-
-            rerun_stdout_text = _read_log(rerun_stdout)
-            rerun_stderr_text = _read_log(rerun_stderr)
-            rerun_signature = _failure_signature(
-                rerun_stdout_text, rerun_stderr_text
-            )
-            rerun_signature_path = logs_dir / "baseline_rerun_signature.txt"
-            rerun_signature_path.write_text(
-                rerun_signature, encoding="utf-8", newline="\n"
-            )
-            attempt.add_artifact(
-                "baseline_rerun_signature", str(rerun_signature_path)
-            )
-
-            comparison_path = logs_dir / "baseline_rerun_comparison.txt"
-            comparison_path.write_text(
-                "\n".join(
-                    [
-                        f"run_1_exit_code: {exit_code}",
-                        f"run_1_signature: {signature}",
-                        f"run_2_exit_code: {rerun_result.exit_code}",
-                        f"run_2_signature: {rerun_signature}",
-                    ]
+            if remaining < min_rerun_budget:
+                skip_path = logs_dir / "baseline_rerun_skipped.txt"
+                skip_path.write_text(
+                    (
+                        "Baseline rerun skipped due to low remaining time.\n"
+                        f"elapsed_sec={elapsed:.2f}\n"
+                        f"remaining_sec={max(0.0, remaining):.2f}\n"
+                    ),
+                    encoding="utf-8",
+                    newline="\n",
                 )
-                + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-            attempt.add_artifact(
-                "baseline_rerun_comparison", str(comparison_path)
-            )
+                attempt.add_artifact(
+                    "baseline_rerun_skipped", str(skip_path)
+                )
+            else:
+                rerun_timeout = max(1, int(remaining))
+                rerun_stdout = Path(logs_dir, "run_rerun_stdout.txt")
+                rerun_stderr = Path(logs_dir, "run_rerun_stderr.txt")
+                rerun_result = sandbox.run(
+                    workspace_host_path=workspace_dir,
+                    command=run_cmd,
+                    network="none",
+                    timeout_sec=rerun_timeout,
+                    stdout_path=rerun_stdout,
+                    stderr_path=rerun_stderr,
+                )
 
-            if (
-                rerun_result.exit_code != exit_code
-                or rerun_signature != signature
-            ):
-                attempt.set_exit_code(rerun_result.exit_code)
-                attempt.set_failure_reason(
-                    reason=FailureReason.BASELINE_FLAKY
+                attempt.add_artifact("run_rerun_stdout", str(rerun_stdout))
+                attempt.add_artifact("run_rerun_stderr", str(rerun_stderr))
+
+                rerun_stdout_text = _read_log(rerun_stdout)
+                rerun_stderr_text = _read_log(rerun_stderr)
+                rerun_signature = _failure_signature(
+                    rerun_stdout_text, rerun_stderr_text
                 )
-                raise RuntimeError(
-                    "baseline validation failed: flaky baseline"
+                rerun_signature_path = logs_dir / "baseline_rerun_signature.txt"
+                rerun_signature_path.write_text(
+                    rerun_signature, encoding="utf-8", newline="\n"
                 )
+                attempt.add_artifact(
+                    "baseline_rerun_signature", str(rerun_signature_path)
+                )
+
+                comparison_path = logs_dir / "baseline_rerun_comparison.txt"
+                comparison_path.write_text(
+                    "\n".join(
+                        [
+                            f"run_1_exit_code: {exit_code}",
+                            f"run_1_signature: {signature}",
+                            f"run_2_exit_code: {rerun_result.exit_code}",
+                            f"run_2_signature: {rerun_signature}",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                attempt.add_artifact(
+                    "baseline_rerun_comparison", str(comparison_path)
+                )
+
+                if (
+                    rerun_result.exit_code != exit_code
+                    or rerun_signature != signature
+                ):
+                    attempt.set_exit_code(rerun_result.exit_code)
+                    attempt.set_failure_reason(
+                        reason=FailureReason.BASELINE_FLAKY
+                    )
+                    raise RuntimeError(
+                        "baseline validation failed: flaky baseline"
+                    )
 
             attempt.valid = True
 

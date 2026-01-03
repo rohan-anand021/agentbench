@@ -1,7 +1,9 @@
+import json
 import logging
 from pathlib import Path
 
-from agentbench.agents.base import Agent, AgentResult
+from agentbench.agents.base import Agent
+from agentbench.agents.types import AgentResult, StopReason
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.tasks.models import TaskSpec
 from agentbench.tools.builtins import list_files, read_file, search, run_tool
@@ -91,12 +93,12 @@ class ScriptedAgent(Agent):
 
         step_2_request = ToolRequest(
             tool = ToolName.READ_FILE,
-            params = ReadFileParams(
-                path = "src/calculator.py",
-                start_line = None,
-                end_line = None
-            ).model_dump(
-                mode = "json"
+            params = json.loads(
+                ReadFileParams(
+                    path = "src/calculator.py",
+                    start_line = None,
+                    end_line = None
+                ).model_dump_json()
             ),
             request_id = f"{self.run_id}-002"
         )
@@ -120,11 +122,11 @@ class ScriptedAgent(Agent):
 
         step_3_request = ToolRequest(
             tool = ToolName.SEARCH,
-            params = SearchParams(
-                query = "def add",
-                glob = "**/*.py",
-            ).model_dump(
-                mode = "json"
+            params = json.loads(
+                SearchParams(
+                    query = "def add",
+                    glob = "**/*.py",
+                ).model_dump_json()
             ),
             request_id = f"{self.run_id}-003"
         )
@@ -148,16 +150,16 @@ class ScriptedAgent(Agent):
 
         step_4_request = ToolRequest(
             tool = ToolName.APPLY_PATCH,
-            params = ApplyPatchParams(
-                unified_diff = """--- a/src/calculator.py
+            params = json.loads(
+                ApplyPatchParams(
+                    unified_diff = """--- a/src/calculator.py
                                   +++ b/src/calculator.py
                                   @@ -1,4 +1,4 @@
                                   def add(a, b):
                                   -    return a - b  # BUG: should be +
                                   +    return a + b
                                 """
-            ).model_dump(
-                mode = "json"
+                ).model_dump_json()
             ),
             request_id = f"{self.run_id}-004"
         )
@@ -175,10 +177,12 @@ class ScriptedAgent(Agent):
             logger.error("Patch application failed at step 4")
             return AgentResult(
                 success = False,
-                stopped_reason = "tool_error",
+                stop_reason = StopReason.TOOL_ERROR,
                 steps_taken = 4,
-                patch_files = [],
-                duration_sec = 0.0
+                patches_applied = [],
+                duration_sec = 0.0,
+                final_test_exit_code = None,
+                final_test_passed = False,
             )
         else:
             event_logger.log_patch_applied(
@@ -198,12 +202,12 @@ class ScriptedAgent(Agent):
 
         step_5_request = ToolRequest(
             tool = ToolName.RUN,
-            params = RunParams(
-                command = "pytest -q",
-                timeout_sec = 60,
-                env = None
-            ).model_dump(
-                mode = "json"
+            params = json.loads(
+                RunParams(
+                    command = "pytest -q",
+                    timeout_sec = 60,
+                    env = None
+                ).model_dump_json()
             ),
             request_id = f"{self.run_id}-005"
         )
@@ -225,10 +229,12 @@ class ScriptedAgent(Agent):
             logger.error("Test execution failed at step 5")
             return AgentResult(
                 success = False,
-                stopped_reason = "run_error",
+                stop_reason = StopReason.TOOL_ERROR,
                 steps_taken = 5,
-                patch_files = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
-                duration_sec = 0.0
+                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                duration_sec = 0.0,
+                final_test_exit_code = step_5_result.exit_code,
+                final_test_passed = False,
             )
 
         event_logger.log_tool_finished(step_5_result)
@@ -247,25 +253,25 @@ class ScriptedAgent(Agent):
             event_logger.log_agent_turn_finished(stopped_reason = "success")
             return AgentResult(
                 success = True,
-                stopped_reason = "success",
+                stop_reason = StopReason.SUCCESS,
                 steps_taken = 5,
-                patch_files = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
                 duration_sec = 0.0,
-                exit_code = step_5_result.exit_code
+                final_test_exit_code = step_5_result.exit_code,
+                final_test_passed = True,
             )
         else:
             logger.warning("Agent run %s failed: tests did not pass", self.run_id)
             event_logger.log_agent_turn_finished(stopped_reason = "tests_failed")
             return AgentResult(
                 success = False,
-                stopped_reason = "tests_failed",
+                stop_reason = StopReason.AGENT_GAVE_UP,
                 steps_taken = 5,
-                patch_files = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
-                duration_sec = 0.0
+                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                duration_sec = 0.0,
+                final_test_exit_code = step_5_result.exit_code,
+                final_test_passed = False,
             )
-
-
-
 
 
 

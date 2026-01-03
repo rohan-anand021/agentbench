@@ -16,6 +16,82 @@ from agentbench.util.process import check_exit_code
 logger = logging.getLogger(__name__)
 
 
+def _resolve_repo_url(repo_url: str, task_source_path: Path) -> str:
+    if repo_url.startswith("file://"):
+        return repo_url
+
+    path_candidate = Path(repo_url)
+    if path_candidate.is_absolute():
+        return str(path_candidate)
+
+    if repo_url.startswith("."):
+        return str((task_source_path.parent / repo_url).resolve())
+
+    base = task_source_path.parent.resolve()
+    while True:
+        candidate = base / repo_url
+        if candidate.exists():
+            return str(candidate.resolve())
+        if base == base.parent:
+            break
+        base = base.parent
+
+    return repo_url
+
+
+def _inspect_docker_image(image: str) -> dict[str, object]:
+    try:
+        inspect_result = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{json .}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if inspect_result.returncode != 0:
+            return {
+                "error": inspect_result.stderr.strip()
+                or "Image inspect failed with no stderr output",
+                "image_id": None,
+                "repo_digests": [],
+            }
+
+        raw_payload = inspect_result.stdout.strip()
+        if not raw_payload:
+            return {
+                "error": "Image inspect returned empty output",
+                "image_id": None,
+                "repo_digests": [],
+            }
+
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError as e:
+            return {
+                "error": f"Image inspect JSON parse failed: {e}",
+                "image_id": None,
+                "repo_digests": [],
+            }
+
+        return {
+            "error": None,
+            "image_id": payload.get("Id"),
+            "repo_digests": payload.get("RepoDigests") or [],
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "error": f"Image inspect timed out: {e}",
+            "image_id": None,
+            "repo_digests": [],
+        }
+    except OSError as e:
+        return {
+            "error": f"Docker unavailable: {e}",
+            "image_id": None,
+            "repo_digests": [],
+        }
+
+
 def run_task(
     task_yaml: Path, out_dir: Path, str_format: str = "%Y-%m-%d_%H-%M-%S"
 ) -> Path:
@@ -53,10 +129,24 @@ def run_task(
     # create workspace/repo
     repo_dir = ensure_dir(Path(workspace_dir, "repo"))
 
+    task_source_path = task_yaml
+    if isinstance(getattr(task, "source_path", None), Path):
+        task_source_path = task.source_path
+
+    repo_url_original = task.repo.url
+    repo_url_resolved = _resolve_repo_url(repo_url_original, task_source_path)
+
+    if repo_url_resolved != repo_url_original:
+        logger.info(
+            "Resolved repo URL from %s to %s",
+            repo_url_original,
+            repo_url_resolved,
+        )
+
     # clone the repo
-    logger.info("Cloning repository from %s", task.repo.url)
+    logger.info("Cloning repository from %s", repo_url_resolved)
     stdout_path, stderr_path, exit_code = clone_repo(
-        url=task.repo.url, dest=repo_dir, logs_dir=logs_dir
+        url=repo_url_resolved, dest=repo_dir, logs_dir=logs_dir
     )
 
     error = check_exit_code("git_clone", exit_code)
@@ -173,42 +263,18 @@ def run_task(
         stderr_path=Path(logs_dir, "run_stderr.txt"),
     )
 
-    try:
-        digest_cmd = subprocess.run(
-            [
-                "docker",
-                "image",
-                "inspect",
-                task.environment.docker_image,
-                "--format={{.Id}}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-
-        if digest_cmd.returncode != 0:
-            err = digest_cmd.stderr.strip()
-            image_digest = f"Image digest unavailable: {err}"
-        else:
-            image_digest = (
-                digest_cmd.stdout.strip()
-                or "Image digest unavailable: empty output"
-            )
-
-    except subprocess.TimeoutExpired as e:
-        image_digest = f"Process timed out: {str(e)}"
-    except OSError as e:
-        image_digest = f"Docker unavailable: {str(e)}"
+    image_metadata = _inspect_docker_image(task.environment.docker_image)
 
     run_data = {
         "run_id": run_id,
         "task_id": task.id,
-        "repo_url": task.repo.url,
+        "repo_url": repo_url_resolved,
+        "repo_url_original": repo_url_original,
         "repo_commit": task.repo.commit,
         "docker_image": task.environment.docker_image,
-        "docker_image_digest": image_digest,
+        "docker_image_id": image_metadata["image_id"],
+        "docker_image_repo_digests": image_metadata["repo_digests"],
+        "docker_image_inspect_error": image_metadata["error"],
         "network_settings": {"Setup": "bridge", "Run": "none"},
         "commands_executed": {
             "setup": task.setup.commands,

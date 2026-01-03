@@ -21,17 +21,20 @@ Versioning Strategy:
 from datetime import datetime
 
 from agentbench.scoring import FailureReason
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 class TimestampInfo(BaseModel):
     model_config = ConfigDict(
         ser_json_timedelta="float",
-        json_encoders={datetime: lambda v: v.isoformat()},
     )
 
     started_at: datetime
     ended_at: datetime
+
+    @field_serializer("started_at", "ended_at")
+    def _serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat()
 
 
 class BaselineValidationResult(BaseModel):
@@ -100,7 +103,6 @@ class AttemptRecord(BaseModel):
 
     model_config = ConfigDict(
         ser_json_timedelta="float",
-        json_encoders={datetime: lambda v: v.isoformat()},
     )
 
     run_id: str

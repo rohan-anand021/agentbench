@@ -5,6 +5,7 @@ from pathlib import Path
 import ulid
 
 from agentbench.agents.base import Agent
+from agentbench.agents.llm_v0 import LLMAgentV0
 from agentbench.agents.scripted import ScriptedAgent
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.schemas.attempt_record import (
@@ -48,18 +49,20 @@ def run_agent_attempt(
 
     def get_agent(
         entrypoint: str,
-        run_id: str
+        run_id: str,
     ) -> Agent:
         agents = {
-            "scripted": ScriptedAgent
+            "scripted": ScriptedAgent,
+            "llm_v0": LLMAgentV0,
         }
 
         if entrypoint not in agents:
-            raise ValueError(
-                f"Unknown agent entrypoint: {entrypoint}"
-            )
-        
-        return agents[entrypoint](run_id = run_id)
+            raise ValueError(f"Unknown agent entrypoint: {entrypoint}")
+
+        if entrypoint == "llm_v0":
+            raise ValueError("llm_v0 requires LLM config and client")
+
+        return agents[entrypoint](run_id=run_id)
 
     try:
         logger.debug("Creating Docker sandbox with image %s", task.environment.docker_image)
@@ -95,7 +98,7 @@ def run_agent_attempt(
             failing_output = validation_result.stderr_path.read_text() if validation_result.stderr_path else ""
         )
 
-        exit_code = result.exit_code
+        exit_code = result.final_test_exit_code if result else -1
 
     except KeyboardInterrupt:
         logger.warning("Agent attempt %s interrupted by user", run_id)
@@ -127,11 +130,16 @@ def run_agent_attempt(
         ),
         result = TaskResult(
             passed = result.success if result else False,
-            exit_code = exit_code,
-            failure_reason = failure_reason or (FailureReason.from_pytest_exit_code(exit_code) if result and not result.success else None)
+            exit_code = exit_code if exit_code is not None else -1,
+            failure_reason = failure_reason
+            or (
+                FailureReason.from_pytest_exit_code(exit_code)
+                if result and not result.success and exit_code is not None
+                else None
+            ),
         ),
         artifact_paths = {
-            "patch_files": ",".join(result.patch_files) if result else ""
+            "patch_files": ",".join(result.patches_applied) if result else ""
         },
         variant = "baseline",
         model = None,

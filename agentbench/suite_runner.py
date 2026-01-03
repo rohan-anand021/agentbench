@@ -36,7 +36,7 @@ def run_suite(
     tasks_root: Path,
     out_dir: Path,
     skip_labels: set[str] | None = None,
-) -> Path:
+) -> Path | None:
     """
     Run baseline validation on all tasks in a suite.
 
@@ -50,6 +50,8 @@ def run_suite(
         - `valid_count: int`
         - `invalid_count: int`
         - Return run directory path
+
+    Returns None if the suite is empty.
     """
     logger.info("Starting suite validation for %s", suite_name)
     tasks = load_suite(tasks_root=tasks_root, suite_name=suite_name)

@@ -145,8 +145,8 @@ class TestDockerSandboxCommandBuilding:
             assert "-w" in cmd
             assert "/workspace" in cmd
             assert "python:3.11" in cmd
-            assert "bash" in cmd
-            assert "-lc" in cmd
+            assert "sh" in cmd
+            assert "-c" in cmd
             assert "pytest tests/" in cmd
 
 

@@ -33,13 +33,13 @@ class TestInputMessageSerialization:
     """Tests for InputMessage serialization."""
 
     def test_input_message_serialization(self) -> None:
-        """InputMessage.model_dump(mode='json') works correctly."""
+        """InputMessage.model_dump_json() works correctly."""
         message = InputMessage(
             role=MessageRole.USER,
             content=[InputTextContent(text="Hello, how are you?")]
         )
 
-        serialized = message.model_dump(mode="json")
+        serialized = json.loads(message.model_dump_json())
 
         assert serialized["type"] == "message"
         assert serialized["role"] == "user"
@@ -79,7 +79,7 @@ class TestFunctionCallTypes:
             arguments=json.dumps({"location": "San Francisco, CA"})
         )
 
-        serialized = fc.model_dump(mode="json")
+        serialized = json.loads(fc.model_dump_json())
 
         assert serialized["type"] == "function_call"
         assert serialized["id"] == "fc_123"
@@ -95,7 +95,7 @@ class TestFunctionCallTypes:
             output=json.dumps({"temperature": "72°F", "condition": "Sunny"})
         )
 
-        serialized = fco.model_dump(mode="json")
+        serialized = json.loads(fco.model_dump_json())
 
         assert serialized["type"] == "function_call_output"
         assert serialized["call_id"] == "call_abc"
@@ -112,7 +112,7 @@ class TestOutputTypes:
             content=[OutputTextContent(text="Hello! How can I help?")]
         )
 
-        serialized = msg.model_dump(mode="json")
+        serialized = json.loads(msg.model_dump_json())
 
         assert serialized["type"] == "message"
         assert serialized["role"] == "assistant"
@@ -129,7 +129,7 @@ class TestOutputTypes:
             arguments=json.dumps({"query": "python"})
         )
 
-        serialized = fc.model_dump(mode="json")
+        serialized = json.loads(fc.model_dump_json())
 
         assert serialized["type"] == "function_call"
         assert serialized["call_id"] == "call_xyz"
@@ -202,7 +202,7 @@ class TestLLMResponseSerialization:
             latency_ms=200,
         )
 
-        json_dict = original.model_dump(mode="json")
+        json_dict = json.loads(original.model_dump_json())
         restored = LLMResponse.model_validate(json_dict)
 
         assert restored.id == original.id
@@ -288,7 +288,7 @@ class TestToolDefinition:
             },
         )
 
-        serialized = tool_def.model_dump(mode="json")
+        serialized = json.loads(tool_def.model_dump_json())
 
         assert serialized["type"] == "function"
         assert serialized["name"] == "read_file"

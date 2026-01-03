@@ -71,6 +71,18 @@ class TestBuildRequestBody:
         assert body["tool_choice"] == "auto"
 
 
+class TestCountTokens:
+    def test_count_tokens_uses_chars_heuristic(self):
+        client = OpenRouterClient(make_config())
+        items = [
+            InputMessage(role=MessageRole.USER, content="hello"),
+            InputMessage(role=MessageRole.USER, content="world"),
+        ]
+        count = client.count_tokens(items)
+        assert isinstance(count, int)
+        assert count >= 0
+
+
 class TestClassifyError:
     def test_error_401_auth_failed(self):
         client = OpenRouterClient(make_config())

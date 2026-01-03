@@ -1,3 +1,4 @@
+import json
 import httpx
 from agentbench.llm.client import LLMClient
 from agentbench.llm.config import LLMConfig
@@ -50,14 +51,14 @@ class OpenRouterClient(LLMClient):
     ) -> dict:
         body = {
             "model": self.model_name,
-            "input": [item.model_dump(mode="json") for item in input_items],
+            "input": [json.loads(item.model_dump_json()) for item in input_items],
             "max_output_tokens": self.config.sampling.max_tokens,
             "temperature": self.config.sampling.temperature,
             "top_p": self.config.sampling.top_p,
         }
 
         if tools:
-            body["tools"] = [tool.model_dump(mode="json") for tool in tools]
+            body["tools"] = [json.loads(tool.model_dump_json()) for tool in tools]
             body["tool_choice"] = "auto"
         
         return body
@@ -204,3 +205,7 @@ class OpenRouterClient(LLMClient):
                 retryable=False
             )
             raise LLMError(LLMErrorType.PROVIDER_ERROR, str(e)) from e
+
+    def count_tokens(self, input_items: list[InputItem]) -> int:
+        total_chars = sum(len(str(item.model_dump())) for item in input_items)
+        return total_chars // 4

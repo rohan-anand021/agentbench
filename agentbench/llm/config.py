@@ -1,3 +1,4 @@
+import json
 from enum import StrEnum
 from pydantic import BaseModel, Field, SecretStr
 from typing import Any
@@ -64,12 +65,9 @@ class LLMConfig(BaseModel):
     prompt_version: str | None = None
 
     def to_safe_dict(self) -> dict[str, Any]:
-        data = self.model_dump(
-            mode = "json"
-        )
+        data = json.loads(self.model_dump_json())
 
         if "provider_config" in data and "api_key" in data["provider_config"]:
             data["provider_config"]["api_key"] = "[REDACTED]"
 
         return data
-

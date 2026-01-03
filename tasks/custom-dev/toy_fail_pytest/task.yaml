@@ -16,10 +16,12 @@ environment:
 
 setup:
   commands:
+    - pip install --upgrade pip
     - pip install pytest
+    - pip install . --target=/workspace/site-packages
 
 run:
-  command: pytest -q
+  command: PYTHONPATH=/workspace/site-packages pytest -q
 
 agent:
   entrypoint: scripted

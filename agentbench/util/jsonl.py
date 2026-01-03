@@ -6,15 +6,16 @@ import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from filelock import FileLock
 
 logger = logging.getLogger(__name__)
 
 
-def append_jsonl(path: Path, record: dict) -> bool:
+def append_jsonl(path: Path, record: dict[str, Any] | str) -> bool:
     """
-    Append a record to a JSONL file atomically.
+    Append a record to a JSONL file atomically (dict or JSON string).
 
     - Open file in append mode
     - Write JSON + newline
@@ -34,7 +35,10 @@ def append_jsonl(path: Path, record: dict) -> bool:
         lock = FileLock(str(path) + ".lock")
 
         with lock:
-            json_line = json.dumps(record) + "\n"
+            if isinstance(record, str):
+                json_line = record if record.endswith("\n") else record + "\n"
+            else:
+                json_line = json.dumps(record) + "\n"
 
             with tempfile.NamedTemporaryFile(
                 mode="wb", delete=False, dir=path.parent

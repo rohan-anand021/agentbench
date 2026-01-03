@@ -1,5 +1,6 @@
 """Unit tests for Event schema."""
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -133,7 +134,7 @@ class TestEventSerialization:
             payload={"files_modified": ["src/main.py"], "success": True},
         )
 
-        json_data = original.model_dump(mode="json")
+        json_data = json.loads(original.model_dump_json())
         restored = Event.model_validate(json_data)
 
         assert restored.event_type == original.event_type
@@ -152,7 +153,7 @@ class TestEventSerialization:
             payload={"exit_code": 0},
         )
 
-        json_data = event.model_dump(mode="json")
+        json_data = json.loads(event.model_dump_json())
         assert "2024-01-15" in json_data["timestamp"]
 
     def test_event_payload_with_nested_structures(self):
@@ -169,7 +170,7 @@ class TestEventSerialization:
             },
         )
 
-        json_data = event.model_dump(mode="json")
+        json_data = json.loads(event.model_dump_json())
         restored = Event.model_validate(json_data)
 
         assert restored.payload["params"]["options"]["max_results"] == 10

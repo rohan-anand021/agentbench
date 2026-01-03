@@ -45,13 +45,22 @@ def mock_task_spec() -> TaskSpec:
 @pytest.fixture
 def toy_fail_pytest_task() -> TaskSpec:
     """Loads the real toy_fail_pytest task."""
-    repo_root = Path(__file__).parent
-    for _ in range(10):
-        if (repo_root / "tasks").exists() and (repo_root / "packages").exists():
+    task_yaml = None
+    for parent in Path(__file__).resolve().parents:
+        candidate = (
+            parent
+            / "tasks"
+            / "custom-dev"
+            / "toy_fail_pytest"
+            / "task.yaml"
+        )
+        if candidate.exists():
+            task_yaml = candidate
             break
-        repo_root = repo_root.parent
-    
-    task_yaml = repo_root / "tasks" / "custom-dev" / "toy_fail_pytest" / "task.yaml"
+
+    if task_yaml is None:
+        raise FileNotFoundError("Could not locate toy_fail_pytest task.yaml")
+
     return load_task(task_yaml)
 
 

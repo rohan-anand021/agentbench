@@ -67,8 +67,8 @@ class TestToolResultSuccess:
         assert len(result.data["files"]) == 2
         assert result.error is None
 
-        # Verify JSON serialization works (mode="json" for datetime)
-        json_data = result.model_dump(mode="json")
+        # Verify JSON serialization works (JSON for datetime)
+        json_data = json.loads(result.model_dump_json())
         assert json_data["status"] == "success"
         assert isinstance(json_data["started_at"], str)  # datetime becomes ISO string
 
@@ -100,7 +100,7 @@ class TestToolResultError:
         assert result.data is None
 
         # Verify JSON serialization works
-        json_data = result.model_dump(mode="json")
+        json_data = json.loads(result.model_dump_json())
         assert json_data["error"]["error_type"] == "file_not_found"
 
 
@@ -120,7 +120,7 @@ class TestListFilesParamsValidation:
         assert params_with_glob.glob == "*.py"
 
         # Verify JSON serialization
-        json_data = params_with_glob.model_dump(mode="json")
+        json_data = json.loads(params_with_glob.model_dump_json())
         assert json_data["root"] == "src"
         assert json_data["glob"] == "*.py"
 
@@ -203,10 +203,10 @@ class TestEventSerialization:
 
 
 class TestAllModelsJsonSerializable:
-    """Test that model_dump(mode='json') produces valid JSON for all models."""
+    """Test that model_dump_json() produces valid JSON for all models."""
 
     def test_all_models_json_serializable(self) -> None:
-        """Verify model_dump(mode='json') works for all contract models."""
+        """Verify model_dump_json() works for all contract models."""
         now = datetime.now()
 
         models = [
@@ -240,10 +240,9 @@ class TestAllModelsJsonSerializable:
 
         for model in models:
             # This should not raise
-            json_data = model.model_dump(mode="json")
+            json_str = model.model_dump_json()
             # Verify it's actually JSON-serializable
-            json_str = json.dumps(json_data)
-            assert json_str  # Non-empty string
+            assert json.loads(json_str)  # Non-empty JSON
 
 
 class TestToolNameEnum:

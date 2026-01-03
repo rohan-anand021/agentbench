@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timezone
 
 import pytest
@@ -40,7 +41,7 @@ def make_valid_attempt_record(**overrides) -> AttemptRecord:
         "variant": "baseline",
         "model": None,
         "limits": LimitsConfig(timeout_sec=600, tool_timeout_sec=None),
-        "schema_version": "1.0",
+        "schema_version": "0.1.0",
     }
     defaults.update(overrides)
     return AttemptRecord(**defaults)
@@ -60,7 +61,7 @@ class TestAttemptRecordCreation:
         assert record.labels == ["smoke"]
         assert record.duration_sec == 300.0
         assert record.variant == "baseline"
-        assert record.schema_version == "1.0"
+        assert record.schema_version == "0.1.0"
         assert record.model is None
         assert record.limits.timeout_sec == 600
 
@@ -92,7 +93,7 @@ class TestAttemptRecordMissingFields:
                 variant="baseline",
                 model=None,
                 limits=LimitsConfig(timeout_sec=600, tool_timeout_sec=None),
-                schema_version="1.0",
+                schema_version="0.1.0",
             )
 
         errors = exc_info.value.errors()
@@ -100,7 +101,7 @@ class TestAttemptRecordMissingFields:
 
     def test_missing_schema_version_raises_validation_error(self):
         with pytest.raises(ValidationError) as exc_info:
-            data = make_valid_attempt_record().model_dump(mode="json")
+            data = json.loads(make_valid_attempt_record().model_dump_json())
             data.pop("schema_version", None)
             AttemptRecord.model_validate(data)
 
@@ -134,13 +135,13 @@ class TestAttemptRecordModelField:
 
 
 class TestAttemptRecordRoundTrip:
-    """Test: Round-trip: model_dump(mode='json') → model_validate() produces equivalent object"""
+    """Test: Round-trip: model_dump_json() → model_validate() produces equivalent object"""
 
     def test_round_trip_produces_equivalent_object(self):
         original = make_valid_attempt_record()
 
         # Serialize to JSON-compatible dict
-        json_dict = original.model_dump(mode="json")
+        json_dict = json.loads(original.model_dump_json())
 
         # Deserialize back to AttemptRecord
         restored = AttemptRecord.model_validate(json_dict)
@@ -172,7 +173,7 @@ class TestAttemptRecordRoundTrip:
         )
         original = make_valid_attempt_record(model=model_config)
 
-        json_dict = original.model_dump(mode="json")
+        json_dict = json.loads(original.model_dump_json())
         restored = AttemptRecord.model_validate(json_dict)
 
         assert restored.model == original.model
@@ -184,7 +185,7 @@ class TestTimestampSerialization:
     def test_timestamps_serialize_to_iso8601_strings(self):
         record = make_valid_attempt_record()
 
-        json_dict = record.model_dump(mode="json")
+        json_dict = json.loads(record.model_dump_json())
 
         # Check that timestamps are strings in ISO 8601 format
         started_at = json_dict["timestamps"]["started_at"]
@@ -213,7 +214,7 @@ class TestTimestampSerialization:
             )
         )
 
-        json_dict = record.model_dump(mode="json")
+        json_dict = json.loads(record.model_dump_json())
 
         started_at = json_dict["timestamps"]["started_at"]
         ended_at = json_dict["timestamps"]["ended_at"]

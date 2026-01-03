@@ -261,7 +261,7 @@ class TestAttemptRecordSchema:
         record = AttemptRecord(**data)
 
         # Serialize to JSON-compatible dict
-        json_data = record.model_dump(mode="json")
+        json_data = json.loads(record.model_dump_json())
 
         # Write to JSONL and read back
         jsonl_file = tmp_path / "attempts.jsonl"

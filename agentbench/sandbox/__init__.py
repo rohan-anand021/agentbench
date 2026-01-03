@@ -1,6 +1,7 @@
 """Sandbox utilities for running commands safely."""
 
-from .docker_sandbox import DockerRunResult, DockerSandbox
+from .docker_sandbox import DockerSandbox
+from .models import DockerRunResult
 from .filesystem import (
     PathEscapeError,
     SymLinkError,

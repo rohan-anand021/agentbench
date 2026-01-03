@@ -6,7 +6,6 @@ from rich.console import Console
 from rich.table import Table
 
 from agentbench.agent_runner import run_agent_attempt
-from agentbench.agents.base import AgentResult
 from agentbench.logging import setup_logging
 from agentbench.run_task import run_task
 from agentbench.schemas.attempt_record import AttemptRecord

@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ class EventLogger:
         )
 
         logger.debug("Logged event %s (step %d) for run %s", event_type, event.step_id, self.run_id)
-        append_jsonl(self.events_file, event.model_dump(mode="json"))
+        append_jsonl(self.events_file, event.model_dump_json())
 
     def log_tool_started(self, request: ToolRequest) -> None:
         """Log when a tool call begins."""
@@ -54,7 +55,7 @@ class EventLogger:
             "duration_sec": result.duration_sec,
         }
         if result.error:
-            payload["error"] = result.error.model_dump(mode="json")
+            payload["error"] = json.loads(result.error.model_dump_json())
         self.log(event_type=EventType.TOOL_CALL_FINISHED, payload=payload)
 
     def log_agent_turn_started(self) -> None:
