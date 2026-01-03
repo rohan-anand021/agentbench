@@ -1,5 +1,6 @@
 import json
 import httpx
+from pydantic import ValidationError
 from agentbench.llm.client import LLMClient
 from agentbench.llm.config import LLMConfig
 from agentbench.llm.messages import (
@@ -104,11 +105,31 @@ class OpenRouterClient(LLMClient):
                 OPENROUTER_API_URL,
                 json=self._build_request_body(input_items, tools)
             )
-            
-            if response.status_code != 200:
-                raise self._classify_error(response.status_code, response.json())
+            try:
+                response_body = response.json()
+            except ValueError:
+                response_body = None
+            if response_body is not None and not isinstance(response_body, dict):
+                response_body = None
 
-            result = LLMResponse.model_validate(response.json())
+            if response.status_code != 200:
+                raise self._classify_error(response.status_code, response_body)
+
+            if response_body is None:
+                raise LLMError(
+                    LLMErrorType.INVALID_RESPONSE,
+                    "Non-JSON response from provider",
+                    retryable=True,
+                )
+
+            try:
+                result = LLMResponse.model_validate(response_body)
+            except ValidationError as e:
+                raise LLMError(
+                    LLMErrorType.INVALID_RESPONSE,
+                    f"Invalid response schema: {e.errors()[:1]}",
+                    retryable=False,
+                ) from e
 
             logger.log_llm_request_finished(
                 request_id=result.id or "",
@@ -142,6 +163,13 @@ class OpenRouterClient(LLMClient):
                 retryable=True
             )
             raise LLMError(LLMErrorType.NETWORK_ERROR, str(e), retryable=True) from e
+        except LLMError as e:
+            logger.log_llm_request_failed(
+                error_type=e.error_type.value,
+                message=str(e),
+                retryable=e.retryable,
+            )
+            raise
         except Exception as e:
             logger.log_llm_request_failed(
                 error_type=LLMErrorType.PROVIDER_ERROR.value,

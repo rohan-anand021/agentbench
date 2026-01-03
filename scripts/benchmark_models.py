@@ -17,6 +17,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # Default models to benchmark (edit this list as needed)
 DEFAULT_MODELS = [
@@ -36,8 +37,115 @@ DEFAULT_MODELS = [
     # "openai/o1-preview",
 ]
 
+def _find_events_path(out_dir: Path) -> Path | None:
+    runs_dir = out_dir / "agent_runs"
+    if not runs_dir.is_dir():
+        return None
+    candidates = sorted(runs_dir.glob("*/events.jsonl"))
+    return candidates[-1] if candidates else None
 
-def run_agent(task_path: str, model: str, out_dir: Path) -> dict:
+
+def _read_last_llm_error(out_dir: Path) -> dict[str, Any] | None:
+    events_path = _find_events_path(out_dir)
+    if not events_path or not events_path.is_file():
+        return None
+
+    last_error = None
+    try:
+        with events_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_type") == "llm_request_failed":
+                    last_error = event.get("payload")
+    except OSError:
+        return None
+
+    return last_error
+
+
+def _probe_model(model: str, with_tools: bool) -> dict[str, Any]:
+    import asyncio
+    from pydantic import SecretStr
+    from agentbench.llm.config import LLMConfig, ProviderConfig, LLMProvider, SamplingParams
+    from agentbench.llm.messages import InputMessage, MessageRole, ToolDefinition
+    from agentbench.llm.openrouter import OpenRouterClient
+    from agentbench.llm.errors import LLMError
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "OPENROUTER_API_KEY is not set"}
+
+    tools = None
+    if with_tools:
+        tools = [
+            ToolDefinition(
+                name="probe_tool",
+                description="Probe tool for model compatibility checks.",
+                parameters={
+                    "type": "object",
+                    "properties": {"echo": {"type": "string"}},
+                },
+            )
+        ]
+
+    llm_config = LLMConfig(
+        provider_config=ProviderConfig(
+            provider=LLMProvider.OPENROUTER,
+            model_name=model,
+            api_key=SecretStr(api_key),
+            timeout_sec=60,
+        ),
+        sampling=SamplingParams(temperature=0.0, max_tokens=128),
+    )
+    client = OpenRouterClient(config=llm_config)
+
+    async def _call() -> dict[str, Any]:
+        response = await client.complete(
+            [InputMessage(role=MessageRole.USER, content="hello")],
+            tools=tools,
+        )
+        return {
+            "success": True,
+            "has_tool_calls": response.has_tool_calls,
+            "text_preview": (response.text_content or "")[:120],
+        }
+
+    try:
+        return asyncio.run(_call())
+    except LLMError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _classify_probe_skip(probe_results: dict[str, Any]) -> str | None:
+    def _msg(result: dict[str, Any] | None) -> str:
+        if not result:
+            return ""
+        return str(result.get("error") or "")
+
+    with_tools = probe_results.get("with_tools")
+    no_tools = probe_results.get("no_tools")
+
+    with_tools_msg = _msg(with_tools)
+    no_tools_msg = _msg(no_tools)
+
+    if "not a valid model ID" in with_tools_msg or "not a valid model ID" in no_tools_msg:
+        return "invalid_model_id"
+    if "No endpoints found that support tool use" in with_tools_msg:
+        return "tools_not_supported"
+    if with_tools_msg and no_tools_msg and "Internal Server Error" in with_tools_msg and "Internal Server Error" in no_tools_msg:
+        return "provider_error"
+    if with_tools and not with_tools.get("success") and (not no_tools or no_tools.get("success")):
+        return "tools_probe_failed"
+
+    return None
+
+def run_agent(task_path: str, model: str, out_dir: Path, timeout_sec: int) -> dict:
     """Run agent with a specific model and return results."""
     
     env = os.environ.copy()
@@ -60,7 +168,7 @@ def run_agent(task_path: str, model: str, out_dir: Path) -> dict:
             env=env,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minute timeout per model
+            timeout=timeout_sec,
         )
         exit_code = result.returncode
         stdout = result.stdout
@@ -79,7 +187,7 @@ def run_agent(task_path: str, model: str, out_dir: Path) -> dict:
     # Parse results from output
     success = "Success" in stdout and "✓" in stdout
     
-    return {
+    result_data = {
         "model": model,
         "success": success,
         "exit_code": exit_code,
@@ -87,6 +195,14 @@ def run_agent(task_path: str, model: str, out_dir: Path) -> dict:
         "stdout": stdout[-2000:] if stdout else "",  # Last 2000 chars
         "stderr": stderr[-1000:] if stderr else "",  # Last 1000 chars
     }
+
+    llm_error = _read_last_llm_error(out_dir)
+    if llm_error:
+        result_data["llm_error_type"] = llm_error.get("error_type")
+        result_data["llm_error_message"] = llm_error.get("message")
+        result_data["llm_error_retryable"] = llm_error.get("retryable")
+
+    return result_data
 
 
 def print_results_table(results: list[dict]):
@@ -99,15 +215,22 @@ def print_results_table(results: list[dict]):
     print("-" * 80)
     
     for r in results:
-        success_str = "✓ PASS" if r["success"] else "✗ FAIL"
+        if r.get("skipped"):
+            success_str = "– SKIP"
+        else:
+            success_str = "✓ PASS" if r["success"] else "✗ FAIL"
         print(f"{r['model']:<45} {success_str:<10} {r['duration_sec']:>8.1f}s    {r['exit_code']:<6}")
     
     print("-" * 80)
     
     # Summary
     passed = sum(1 for r in results if r["success"])
+    skipped = sum(1 for r in results if r.get("skipped"))
     total = len(results)
-    print(f"\nTotal: {passed}/{total} models passed")
+    runnable = total - skipped
+    print(f"\nTotal: {passed}/{runnable} models passed")
+    if skipped:
+        print(f"Skipped: {skipped}")
     
     if passed > 0:
         print("\nSuccessful models:")
@@ -122,6 +245,18 @@ def main():
     parser.add_argument("--models", help="Path to file with model names (one per line)")
     parser.add_argument("--out", default="artifacts/benchmark", help="Output directory")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    parser.add_argument(
+        "--timeout-sec",
+        type=int,
+        default=300,
+        help="Timeout in seconds for each model run",
+    )
+    parser.add_argument(
+        "--probe-mode",
+        choices=["none", "no-tools", "with-tools", "both"],
+        default="none",
+        help="Optional probe calls before each run.",
+    )
     args = parser.parse_args()
     
     # Load models
@@ -157,17 +292,61 @@ def main():
     for i, model in enumerate(models, 1):
         print(f"\n[{i}/{len(models)}] Testing: {model}")
         print("-" * 40)
-        
+
+        probe_results = {}
+        if args.probe_mode in {"no-tools", "both"}:
+            probe_results["no_tools"] = _probe_model(model, with_tools=False)
+        if args.probe_mode in {"with-tools", "both"}:
+            probe_results["with_tools"] = _probe_model(model, with_tools=True)
+        if probe_results:
+            for label, probe in probe_results.items():
+                if probe.get("success"):
+                    preview = probe.get("text_preview") or ""
+                    print(f"  Probe ({label}): ok {preview!r}")
+                else:
+                    print(f"  Probe ({label}): failed - {probe.get('error')}")
+
+        skip_reason = _classify_probe_skip(probe_results) if probe_results else None
+        if skip_reason == "invalid_model_id":
+            print("  Skipping run: invalid model ID")
+        elif skip_reason == "tools_not_supported":
+            print("  Skipping run: model has no tool-enabled endpoints")
+        elif skip_reason == "provider_error":
+            print("  Skipping run: provider error during probe")
+        elif skip_reason == "tools_probe_failed":
+            print("  Skipping run: tool-enabled probe failed")
+
         # Each model gets its own output directory
         model_out = out_dir / model.replace("/", "_").replace(":", "_")
-        
-        result = run_agent(args.task, model, model_out)
+
+        if skip_reason:
+            result = {
+                "model": model,
+                "success": False,
+                "exit_code": 0,
+                "duration_sec": 0.0,
+                "stdout": "",
+                "stderr": "",
+                "skipped": True,
+                "skip_reason": skip_reason,
+            }
+        else:
+            result = run_agent(args.task, model, model_out, args.timeout_sec)
+        if probe_results:
+            result["probe"] = probe_results
         results.append(result)
         
-        if result["success"]:
+        if result.get("skipped"):
+            print("  – SKIPPED")
+        elif result["success"]:
             print(f"  ✓ PASSED in {result['duration_sec']}s")
         else:
             print(f"  ✗ FAILED (exit={result['exit_code']}) in {result['duration_sec']}s")
+            if result.get("llm_error_message"):
+                print(
+                    f"    LLM {result.get('llm_error_type')}: "
+                    f"{result.get('llm_error_message')[:160]}"
+                )
             if result["stderr"]:
                 # Show last few meaningful error lines (skip empty lines)
                 lines = [l.strip() for l in result["stderr"].split("\n") if l.strip()]
@@ -198,4 +377,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

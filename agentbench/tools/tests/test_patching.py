@@ -63,6 +63,24 @@ PATH_ESCAPE_PATCH = """\
 +hacked
 """
 
+NOEOF_PATCH = """\
+--- a/src/main.py
++++ b/src/main.py
+@@ -1,2 +1,2 @@
+ def foo():
+-    return 1
++    return 2
+"""
+
+BAD_HUNK_COUNT_PATCH = """\
+--- a/src/main.py
++++ b/src/main.py
+@@ -1,3 +1,3 @@
+ def foo():
+-    return 1
++    return 2
+"""
+
 
 class TestParseUnifiedDiff:
     """Tests for parse_unified_diff function."""
@@ -220,6 +238,44 @@ class TestApplyPatch:
             artifact_path = artifacts / "step_0001.patch"
             assert artifact_path.exists()
             assert artifact_path.read_text() == SIMPLE_PATCH
+
+    def test_apply_patch_handles_missing_newline(self):
+        """Patch applies when file lacks trailing newline."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_bytes(b"def foo():\n    return 1")
+
+            params = ApplyPatchParams(unified_diff=NOEOF_PATCH)
+            result = apply_patch(workspace, params, step_id=2, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            content = file_path.read_text()
+            assert "return 2" in content
+
+    def test_apply_patch_repairs_hunk_counts(self):
+        """Patch applies when hunk header counts are wrong."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_text("def foo():\n    return 1\n")
+
+            params = ApplyPatchParams(unified_diff=BAD_HUNK_COUNT_PATCH)
+            result = apply_patch(workspace, params, step_id=3, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            content = file_path.read_text()
+            assert "return 2" in content
 
 
 class TestApplyPatchEvents:

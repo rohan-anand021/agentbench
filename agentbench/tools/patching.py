@@ -1,4 +1,5 @@
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,153 @@ from agentbench.tools.contract import (
 from agentbench.tools.patch_models import FilePatch, PatchHunk
 
 logger = logging.getLogger(__name__)
+
+HUNK_HEADER_RE = re.compile(r"@@ -(\d+)(?:,(\d+))? \\+(\d+)(?:,(\d+))? @@")
+
+
+def _file_missing_trailing_newline(path: Path) -> tuple[bool, int | None]:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False, None
+    if data.endswith(b"\n"):
+        return False, len(data.splitlines())
+    return True, len(data.splitlines())
+
+
+def _normalize_noeof_markers(patch_txt: str, workspace_root: Path) -> tuple[str, bool]:
+    lines = patch_txt.splitlines()
+    out: list[str] = []
+    changed = False
+
+    current_old_path: str | None = None
+    old_missing_newline = False
+    old_last_line: int | None = None
+    inserted_old = False
+    in_hunk = False
+    old_line = 0
+    new_line = 0
+
+    for line in lines:
+        if line.startswith("--- "):
+            raw_old_path = line.split("--- ")[1]
+            current_old_path = (
+                raw_old_path
+                if raw_old_path == "/dev/null"
+                else raw_old_path.lstrip("a/")
+            )
+            old_missing_newline = False
+            old_last_line = None
+            inserted_old = False
+            in_hunk = False
+            if current_old_path and current_old_path != "/dev/null":
+                old_path = workspace_root / current_old_path
+                old_missing_newline, old_last_line = _file_missing_trailing_newline(old_path)
+            out.append(line)
+            continue
+        if line.startswith("+++ "):
+            out.append(line)
+            continue
+        if line.startswith("@@ "):
+            match = HUNK_HEADER_RE.match(line)
+            if match:
+                old_line = int(match.group(1))
+                new_line = int(match.group(3))
+                in_hunk = True
+            out.append(line)
+            continue
+
+        if not in_hunk:
+            out.append(line)
+            continue
+
+        if line.startswith("\\ No newline at end of file"):
+            out.append(line)
+            inserted_old = True
+            continue
+
+        if line.startswith(" ") or line.startswith("-"):
+            if (
+                old_missing_newline
+                and not inserted_old
+                and old_last_line
+                and old_line == old_last_line
+            ):
+                out.append(line)
+                out.append("\\ No newline at end of file")
+                changed = True
+                inserted_old = True
+            else:
+                out.append(line)
+
+            if line.startswith(" "):
+                old_line += 1
+                new_line += 1
+            else:
+                old_line += 1
+            continue
+
+        if line.startswith("+"):
+            out.append(line)
+            new_line += 1
+            continue
+
+        out.append(line)
+
+    return "\n".join(out), changed
+
+
+def _normalize_hunk_counts(patch_txt: str) -> tuple[str, bool]:
+    lines = patch_txt.splitlines()
+    out: list[str] = []
+    changed = False
+    header: str | None = None
+    hunk_lines: list[str] = []
+
+    def flush_hunk() -> None:
+        nonlocal changed, header, hunk_lines
+        if header is None:
+            return
+        match = HUNK_HEADER_RE.match(header)
+        if match:
+            old_start = int(match.group(1))
+            new_start = int(match.group(3))
+            old_count = 0
+            new_count = 0
+            for hline in hunk_lines:
+                if hline.startswith("\\ No newline at end of file"):
+                    continue
+                if hline.startswith(" ") or hline.startswith("-"):
+                    old_count += 1
+                if hline.startswith(" ") or hline.startswith("+"):
+                    new_count += 1
+            new_header = f"@@ -{old_start},{old_count} +{new_start},{new_count} @@"
+            if new_header != header:
+                changed = True
+            out.append(new_header)
+        else:
+            out.append(header)
+        out.extend(hunk_lines)
+        header = None
+        hunk_lines = []
+
+    for line in lines:
+        if line.startswith("--- ") or line.startswith("+++ "):
+            flush_hunk()
+            out.append(line)
+            continue
+        if line.startswith("@@ "):
+            flush_hunk()
+            header = line
+            hunk_lines = []
+            continue
+        if header is not None:
+            hunk_lines.append(line)
+        else:
+            out.append(line)
+
+    flush_hunk()
+    return "\n".join(out), changed
 
 
 def parse_unified_diff(patch_txt: str) -> list[FilePatch]:
@@ -204,21 +352,46 @@ def apply_patch(
     request_id = f"patch_{step_id}"
     logger.debug("Applying patch at step %d", step_id)
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as f:
-        f.write(params.unified_diff)
-        patch_file = f.name
+    patch_text = params.unified_diff
+    patch_file = None
+
+    def _write_patch(text: str) -> str:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
+            f.write(text)
+            return f.name
+
+    patch_file = _write_patch(patch_text)
 
     dry_run = subprocess.run(
-        ["patch",
-        "--dry-run",
-        "-p1",
-        "-d",
-        str(workspace_root),
-        "-i",
-        patch_file],
+        ["patch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
         capture_output=True,
-        text=True
+        text=True,
     )
+
+    if dry_run.returncode != 0:
+        normalized_patch, changed = _normalize_hunk_counts(patch_text)
+        if changed:
+            patch_text = normalized_patch
+            patch_file = _write_patch(patch_text)
+            dry_run = subprocess.run(
+                ["patch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
+                capture_output=True,
+                text=True,
+            )
+
+    if dry_run.returncode != 0:
+        normalized_patch, changed = _normalize_noeof_markers(
+            patch_text,
+            workspace_root,
+        )
+        if changed:
+            patch_text = normalized_patch
+            patch_file = _write_patch(patch_text)
+            dry_run = subprocess.run(
+                ["patch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
+                capture_output=True,
+                text=True,
+            )
 
     if dry_run.returncode != 0:
         logger.error("Patch dry-run failed: %s", dry_run.stderr)
@@ -234,19 +407,14 @@ def apply_patch(
             error=ToolError(
                 error_type="patch_hunk_fail",
                 message="Patch does not apply cleanly",
-                details={"stderr": dry_run.stderr}
-            )
+                details={"stderr": dry_run.stderr},
+            ),
         )
 
     subprocess.run(
-        ["patch",
-        "-p1",
-        "-d",
-        str(workspace_root),
-        "-i",
-        patch_file],
+        ["patch", "-p1", "-d", str(workspace_root), "-i", patch_file],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     artifact_path = artifacts_dir / f"step_{step_id:04d}.patch"

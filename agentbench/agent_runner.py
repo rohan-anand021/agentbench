@@ -7,6 +7,7 @@ import ulid
 from agentbench.agents.base import Agent
 from agentbench.agents.llm_v0 import LLMAgentV0
 from agentbench.agents.loop import AgentLoop
+from agentbench.agents.types import AgentBudget
 from agentbench.agents.scripted import ScriptedAgent
 from agentbench.llm.client import LLMClient
 from agentbench.llm.config import LLMConfig
@@ -58,13 +59,18 @@ def run_agent_attempt(
     def get_agent(
         entrypoint: str,
         run_id: str,
+        event_logger: EventLogger | None,
     ) -> Agent:
         if entrypoint == "scripted":
             return ScriptedAgent(run_id=run_id)
         elif entrypoint == "llm_v0":
             if not llm_config or not llm_client:
                 raise ValueError("llm_v0 requires LLM config and client")
-            return LLMAgentV0(config=llm_config, client=llm_client)
+            return LLMAgentV0(
+                config=llm_config,
+                client=llm_client,
+                event_logger=event_logger,
+            )
         else:
             raise ValueError(f"Unknown agent entrypoint: {entrypoint}")
 
@@ -88,10 +94,18 @@ def run_agent_attempt(
                 "baseline validation passed unexpectedly - task is invalid"
             )
 
+        event_logger = None
+        if entrypoint != "scripted":
+            event_logger = EventLogger(
+                run_id=run_id,
+                events_file=artifacts_dir / "events.jsonl"
+            )
+
         logger.debug("Instantiating agent with entrypoint %s", entrypoint)
         agent = get_agent(
             entrypoint = entrypoint,
-            run_id = run_id
+            run_id = run_id,
+            event_logger = event_logger,
         )
 
         if isinstance(agent, ScriptedAgent):
@@ -104,17 +118,25 @@ def run_agent_attempt(
             )
         else:
             # Use AgentLoop for other agents (like llm_v0)
-            event_logger = EventLogger(
-                run_id=run_id,
-                events_file=artifacts_dir / "events.jsonl"
-            )
+            if event_logger is None:
+                event_logger = EventLogger(
+                    run_id=run_id,
+                    events_file=artifacts_dir / "events.jsonl"
+                )
+            budget = None
+            if task.agent is not None:
+                budget = AgentBudget(
+                    max_steps=task.agent.max_steps,
+                    max_time_sec=max(task.environment.timeout_sec, 60),
+                )
             loop = AgentLoop(
                 agent=agent,
                 task=task,
                 workspace_root=workspace_dir,
                 artifacts_dir=artifacts_dir,
                 sandbox=sandbox,
-                event_logger=event_logger
+                event_logger=event_logger,
+                budget=budget,
             )
             result = loop.run()
 

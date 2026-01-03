@@ -41,6 +41,7 @@ Use standard unified diff format:
 - Be precise with line numbers in patches
 - Include enough context for the patch to apply
 - If a patch fails, read the file again to get current state
+- Always respond with a tool call (no plain text responses)
 """
 
 

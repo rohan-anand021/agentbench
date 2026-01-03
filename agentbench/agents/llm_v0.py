@@ -25,12 +25,19 @@ from agentbench.llm.messages import (
     ToolDefinition,
 )
 from agentbench.tools.contract import ToolName, ToolRequest
+from agentbench.util.events import EventLogger, NullEventLogger, NULL_EVENT_LOGGER
 
 
 class LLMAgentV0(Agent):
-    def __init__(self, config: LLMConfig, client: LLMClient):
+    def __init__(
+        self,
+        config: LLMConfig,
+        client: LLMClient,
+        event_logger: EventLogger | NullEventLogger | None = None,
+    ):
         super().__init__(config)
         self.client = client
+        self.event_logger = event_logger or NULL_EVENT_LOGGER
         self._request_counter = 0
 
     @property
@@ -201,21 +208,40 @@ class LLMAgentV0(Agent):
         if response.has_tool_calls:
             tool_call = response.tool_calls[0]
             if isinstance(tool_call, dict):
-                name = tool_call.get("name")
-                args_text = tool_call.get("arguments", "{}")
-                call_id = tool_call.get("call_id") or tool_call.get("id")
+                name = tool_call.get("name") or tool_call.get("tool_name")
+                args_text = tool_call.get("arguments") or tool_call.get("args")
+                call_id = (
+                    tool_call.get("call_id")
+                    or tool_call.get("tool_call_id")
+                    or tool_call.get("id")
+                )
+                function = tool_call.get("function")
+                if not name and isinstance(function, dict):
+                    name = function.get("name")
+                    args_text = args_text or function.get("arguments")
             else:
                 name = tool_call.name
                 args_text = tool_call.arguments
                 call_id = tool_call.call_id or tool_call.id
 
-            try:
-                params: dict[str, Any] = json.loads(args_text) if args_text else {}
-            except json.JSONDecodeError:
+            if isinstance(args_text, dict):
+                params = args_text
+            elif isinstance(args_text, str):
+                try:
+                    params = json.loads(args_text) if args_text else {}
+                except json.JSONDecodeError:
+                    return AgentAction(
+                        decision=AgentDecision.STOP,
+                        stop_reason=StopReason.LLM_ERROR,
+                        reasoning="Invalid tool arguments JSON.",
+                    )
+            elif args_text is None:
+                params = {}
+            else:
                 return AgentAction(
                     decision=AgentDecision.STOP,
                     stop_reason=StopReason.LLM_ERROR,
-                    reasoning="Invalid tool arguments JSON.",
+                    reasoning="Unsupported tool arguments format.",
                 )
 
             try:
@@ -238,6 +264,17 @@ class LLMAgentV0(Agent):
             )
 
         text = (response.text_content or "").strip()
+        diff_text = self._extract_unified_diff(text)
+        if diff_text:
+            request_id = self._next_request_id(state)
+            return AgentAction(
+                decision=AgentDecision.CALL_TOOL,
+                tool_request=ToolRequest(
+                    tool=ToolName.APPLY_PATCH,
+                    params={"unified_diff": diff_text},
+                    request_id=request_id,
+                ),
+            )
         reason = text or "No tool call returned."
         return AgentAction(
             decision=AgentDecision.STOP,
@@ -251,7 +288,11 @@ class LLMAgentV0(Agent):
         tools: list[ToolDefinition] | None,
     ) -> LLMResponse:
         async def _call() -> LLMResponse:
-            return await self.client.complete(input_items=input_items, tools=tools)
+            return await self.client.complete(
+                input_items=input_items,
+                tools=tools,
+                event_logger=self.event_logger,
+            )
 
         # Always use asyncio.run() to get a fresh event loop for each call.
         # This avoids issues with closed/stale loops since we create a fresh
@@ -261,3 +302,36 @@ class LLMAgentV0(Agent):
     def _next_request_id(self, state: AgentState) -> str:
         self._request_counter += 1
         return f"{state.run_id}-{state.step_number:04d}-{self._request_counter:02d}"
+
+    @staticmethod
+    def _extract_unified_diff(text: str) -> str | None:
+        if not text:
+            return None
+
+        lines = text.splitlines()
+        in_diff = False
+        diff_lines: list[str] = []
+
+        for line in lines:
+            if not in_diff and line.strip().startswith("```diff"):
+                in_diff = True
+                continue
+            if in_diff:
+                if line.strip().startswith("```"):
+                    break
+                diff_lines.append(line)
+
+        if diff_lines and any(l.startswith("--- ") for l in diff_lines):
+            return "\n".join(diff_lines).strip()
+
+        start = None
+        for i, line in enumerate(lines):
+            if line.startswith("--- "):
+                start = i
+                break
+        if start is not None:
+            tail = lines[start:]
+            if any(l.startswith("+++ ") for l in tail):
+                return "\n".join(tail).strip()
+
+        return None

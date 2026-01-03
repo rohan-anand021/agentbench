@@ -34,8 +34,13 @@ def resolve_safe_path(
     """
 
     workspace_root = Path(workspace_root).resolve()
+    workspace_prefix = "/workspace"
 
-    if relative_path.startswith('/'):
+    if relative_path == workspace_prefix:
+        relative_path = ""
+    elif relative_path.startswith(f"{workspace_prefix}/"):
+        relative_path = relative_path[len(workspace_prefix) + 1:]
+    elif relative_path.startswith('/'):
         relative_path = relative_path.strip('/')
 
     candidate = (workspace_root / relative_path).resolve()
@@ -78,7 +83,6 @@ def safe_glob(
 
     logger.debug("safe_glob matched %d files for pattern %s", len(files), pattern)
     return sorted(files)
-
 
 
 

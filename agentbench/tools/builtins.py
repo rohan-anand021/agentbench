@@ -66,7 +66,13 @@ def list_files(
         )
 
         logger.debug("list_files found %d files in %s", len(files), params.root)
-        data = {"files": [str(f) for f in files]}
+        file_paths = []
+        for f in files:
+            try:
+                file_paths.append(str(f.relative_to(workspace_root)))
+            except ValueError:
+                file_paths.append(str(f))
+        data = {"files": file_paths}
 
     except PathEscapeError as e:
         error = ToolError(
