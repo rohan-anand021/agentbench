@@ -136,3 +136,27 @@ def test_log_llm_messages_writes_truncated_payload(tmp_path, monkeypatch):
     response_content = record["response"]["content"]
     assert "... [30 chars truncated] ..." in request_payload
     assert "... [30 chars truncated] ..." in response_content
+
+
+def test_log_agent_finished_writes_event(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    logger = EventLogger(
+        run_id="01TEST",
+        events_file=events_path,
+    )
+
+    logger.log_agent_finished(
+        success=False,
+        stop_reason="MAX_STEPS",
+        steps_taken=5,
+        final_test_exit_code=1,
+        final_test_passed=False,
+        failure_reason="AGENT_GAVE_UP",
+    )
+
+    records = list(read_jsonl(events_path))
+    assert len(records) == 1
+    record = records[0]
+    assert record["event_type"] == "agent_finished"
+    assert record["payload"]["stop_reason"] == "MAX_STEPS"
+    assert record["payload"]["failure_reason"] == "AGENT_GAVE_UP"

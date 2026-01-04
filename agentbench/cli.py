@@ -38,6 +38,8 @@ def print_agent_summary(record: AttemptRecord) -> None:
     table.add_row("Exit Code", str(record.result.exit_code))
     table.add_row("Duration", f"{record.duration_sec:.1f}s")
     table.add_row("Variant", record.variant or "baseline")
+    if record.result.stop_reason:
+        table.add_row("Stop Reason", str(record.result.stop_reason))
     
     if record.result.failure_reason:
         table.add_row("Failure Reason", str(record.result.failure_reason))

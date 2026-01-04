@@ -10,6 +10,7 @@ class EventType(StrEnum):
     TOOL_CALL_FINISHED = "tool_call_finished"
     AGENT_TURN_STARTED = "agent_turn_started"
     AGENT_TURN_FINISHED = "agent_turn_finished"
+    AGENT_FINISHED = "agent_finished"
     PATCH_APPLIED = "patch_applied"
     TESTS_STARTED = "tests_started"
     TESTS_FINISHED = "tests_finished"

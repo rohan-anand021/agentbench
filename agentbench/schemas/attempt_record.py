@@ -20,6 +20,7 @@ Versioning Strategy:
 
 from datetime import datetime
 
+from agentbench.agents.types import StopReason
 from agentbench.scoring import FailureReason
 from pydantic import BaseModel, ConfigDict, field_serializer
 
@@ -47,6 +48,7 @@ class TaskResult(BaseModel):
     passed: bool
     exit_code: int
     failure_reason: FailureReason | None
+    stop_reason: StopReason | None = None
 
 
 class ModelConfig(BaseModel):
@@ -92,13 +94,13 @@ class AttemptRecord(BaseModel):
             timestamps: TimestampInfo  # started_at, ended_at
             duration_sec: float
             baseline_validation: BaselineValidationResult
-            result: TaskResult  # passed, exit_code, failure_reason
+            result: TaskResult  # passed, exit_code, failure_reason, stop_reason
             artifact_paths: dict[str, str]
         ```
     - Nested models:
         - `TimestampInfo`: `started_at: datetime`, `ended_at: datetime`
         - `BaselineValidationResult`: `attempted: bool`, `failed_as_expected: bool`, `exit_code: int`
-        - `TaskResult`: `passed: bool`, `exit_code: int`, `failure_reason: str | None`
+        - `TaskResult`: `passed: bool`, `exit_code: int`, `failure_reason: str | None`, `stop_reason: str | None`
     """
 
     model_config = ConfigDict(

@@ -18,6 +18,7 @@ class TestEventTypeEnum:
             "TOOL_CALL_FINISHED",
             "AGENT_TURN_STARTED",
             "AGENT_TURN_FINISHED",
+            "AGENT_FINISHED",
             "PATCH_APPLIED",
             "TESTS_STARTED",
             "TESTS_FINISHED",
@@ -31,6 +32,7 @@ class TestEventTypeEnum:
         """Event type values are snake_case strings."""
         assert EventType.TOOL_CALL_STARTED.value == "tool_call_started"
         assert EventType.TOOL_CALL_FINISHED.value == "tool_call_finished"
+        assert EventType.AGENT_FINISHED.value == "agent_finished"
         assert EventType.PATCH_APPLIED.value == "patch_applied"
 
     def test_event_type_is_str_enum(self):

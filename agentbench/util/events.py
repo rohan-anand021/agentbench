@@ -185,6 +185,27 @@ class EventLogger:
             payload={"stopped_reason": stopped_reason},
         )
 
+    def log_agent_finished(
+        self,
+        success: bool,
+        stop_reason: str | None,
+        steps_taken: int,
+        final_test_exit_code: int | None,
+        final_test_passed: bool,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Log when an agent run completes."""
+        payload = {
+            "success": success,
+            "stop_reason": stop_reason,
+            "steps_taken": steps_taken,
+            "final_test_exit_code": final_test_exit_code,
+            "final_test_passed": final_test_passed,
+        }
+        if failure_reason is not None:
+            payload["failure_reason"] = failure_reason
+        self.log(event_type=EventType.AGENT_FINISHED, payload=payload)
+
     def log_patch_applied(
         self, step_id: int, changed_files: list[str], patch_artifact_path: str
     ) -> None:

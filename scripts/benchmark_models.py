@@ -72,6 +72,30 @@ def _read_last_llm_error(out_dir: Path) -> dict[str, Any] | None:
     return last_error
 
 
+def _read_last_agent_summary(out_dir: Path) -> dict[str, Any] | None:
+    events_path = _find_events_path(out_dir)
+    if not events_path or not events_path.is_file():
+        return None
+
+    last_summary = None
+    try:
+        with events_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_type") == "agent_finished":
+                    last_summary = event.get("payload")
+    except OSError:
+        return None
+
+    return last_summary
+
+
 def _probe_model(model: str, with_tools: bool) -> dict[str, Any]:
     import asyncio
     from pydantic import SecretStr
@@ -221,6 +245,11 @@ def run_agent(
         result_data["llm_error_message"] = llm_error.get("message")
         result_data["llm_error_retryable"] = llm_error.get("retryable")
 
+    agent_summary = _read_last_agent_summary(out_dir)
+    if agent_summary:
+        result_data["stop_reason"] = agent_summary.get("stop_reason")
+        result_data["failure_reason"] = agent_summary.get("failure_reason")
+
     return result_data
 
 
@@ -230,7 +259,7 @@ def print_results_table(results: list[dict]):
     print("\n" + "=" * 80)
     print("BENCHMARK RESULTS")
     print("=" * 80)
-    print(f"{'Model':<45} {'Success':<10} {'Duration':<12} {'Exit':<6}")
+    print(f"{'Model':<45} {'Success':<10} {'Duration':<12} {'Exit':<6} {'Reason'}")
     print("-" * 80)
     
     for r in results:
@@ -238,7 +267,15 @@ def print_results_table(results: list[dict]):
             success_str = "– SKIP"
         else:
             success_str = "✓ PASS" if r["success"] else "✗ FAIL"
-        print(f"{r['model']:<45} {success_str:<10} {r['duration_sec']:>8.1f}s    {r['exit_code']:<6}")
+        reason = ""
+        if r.get("skipped"):
+            reason = r.get("skip_reason") or ""
+        elif not r.get("success"):
+            reason = r.get("failure_reason") or r.get("stop_reason") or ""
+        print(
+            f"{r['model']:<45} {success_str:<10} "
+            f"{r['duration_sec']:>8.1f}s    {r['exit_code']:<6} {reason}"
+        )
     
     print("-" * 80)
     
@@ -432,6 +469,13 @@ def main():
                     f"    LLM {result.get('llm_error_type')}: "
                     f"{result.get('llm_error_message')[:160]}"
                 )
+            reason_parts = []
+            if result.get("failure_reason"):
+                reason_parts.append(f"failure={result['failure_reason']}")
+            if result.get("stop_reason"):
+                reason_parts.append(f"stop={result['stop_reason']}")
+            if reason_parts:
+                print(f"    {', '.join(reason_parts)}")
             if result["stderr"]:
                 # Show last few meaningful error lines (skip empty lines)
                 lines = [l.strip() for l in result["stderr"].split("\n") if l.strip()]

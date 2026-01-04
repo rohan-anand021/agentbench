@@ -8,7 +8,7 @@ import ulid
 from agentbench.agents.base import Agent
 from agentbench.agents.llm_v0 import LLMAgentV0
 from agentbench.agents.loop import AgentLoop
-from agentbench.agents.types import AgentBudget
+from agentbench.agents.types import AgentBudget, StopReason
 from agentbench.agents.scripted import ScriptedAgent
 from agentbench.llm.client import LLMClient
 from agentbench.llm.config import LLMConfig
@@ -58,6 +58,7 @@ def run_agent_attempt(
     validation_result = None
     failure_reason = None
     exit_code = -1
+    event_logger = None
     entrypoint = variant_override or task.agent.entrypoint
 
     def _resolve_repo_url(repo_url: str, task_source_path: Path) -> str:
@@ -81,6 +82,27 @@ def run_agent_attempt(
             base = base.parent
 
         return repo_url
+
+    def _failure_from_stop_reason(
+        stop_reason: StopReason | None,
+    ) -> FailureReason | None:
+        if stop_reason is None:
+            return None
+        match stop_reason:
+            case StopReason.SUCCESS:
+                return None
+            case StopReason.LLM_ERROR:
+                return FailureReason.LLM_ERROR
+            case StopReason.TOOL_ERROR:
+                return FailureReason.TOOL_ERROR
+            case StopReason.MAX_TIME:
+                return FailureReason.TIMEOUT
+            case StopReason.MAX_STEPS | StopReason.AGENT_GAVE_UP | StopReason.REPEATED_FAILURE:
+                return FailureReason.AGENT_GAVE_UP
+            case StopReason.INTERRUPTED:
+                return FailureReason.INTERRUPTED
+            case _:
+                return None
 
     def get_agent(
         entrypoint: str,
@@ -149,7 +171,6 @@ def run_agent_attempt(
                     "baseline validation passed unexpectedly - task is invalid"
                 )
 
-        event_logger = None
         if entrypoint != "scripted":
             event_logger = EventLogger(
                 run_id=run_id,
@@ -211,6 +232,28 @@ def run_agent_attempt(
         logger.exception("Agent attempt %s failed with error: %s", run_id, e)
         failure_reason = FailureReason.UNKNOWN
 
+    stop_reason = result.stop_reason if result else None
+    failure_from_stop = _failure_from_stop_reason(stop_reason)
+    if failure_reason is None:
+        failure_reason = failure_from_stop
+    if (
+        failure_reason is None
+        and result
+        and not result.success
+        and exit_code is not None
+    ):
+        failure_reason = FailureReason.from_pytest_exit_code(exit_code)
+
+    if event_logger and result:
+        event_logger.log_agent_finished(
+            success=result.success,
+            stop_reason=str(result.stop_reason),
+            steps_taken=result.steps_taken,
+            final_test_exit_code=result.final_test_exit_code,
+            final_test_passed=result.final_test_passed,
+            failure_reason=str(failure_reason) if failure_reason else None,
+        )
+
     ended_at = datetime.now(timezone.utc)
     duration = (ended_at - started_at).total_seconds()
     logger.info("Agent attempt %s completed in %.2fs, passed=%s", run_id, duration, result.success if result else False)
@@ -235,12 +278,8 @@ def run_agent_attempt(
         result = TaskResult(
             passed = result.success if result else False,
             exit_code = exit_code if exit_code is not None else -1,
-            failure_reason = failure_reason
-            or (
-                FailureReason.from_pytest_exit_code(exit_code)
-                if result and not result.success and exit_code is not None
-                else None
-            ),
+            failure_reason = failure_reason,
+            stop_reason = stop_reason,
         ),
         artifact_paths = {
             "patch_files": ",".join(result.patches_applied) if result else ""

@@ -21,6 +21,7 @@ class TestToolSchemaEventTypeEnum:
         """Agent turn event types have correct values."""
         assert EventType.AGENT_TURN_STARTED.value == "agent_turn_started"
         assert EventType.AGENT_TURN_FINISHED.value == "agent_turn_finished"
+        assert EventType.AGENT_FINISHED.value == "agent_finished"
 
     def test_event_type_task_lifecycle_values(self):
         """Task lifecycle event types have correct values."""

@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timezone
 
 import pytest
+from agentbench.agents.types import StopReason
 from agentbench.schemas.attempt_record import (
     AttemptRecord,
     BaselineValidationResult,
@@ -177,6 +178,20 @@ class TestAttemptRecordRoundTrip:
         restored = AttemptRecord.model_validate(json_dict)
 
         assert restored.model == original.model
+
+
+class TestTaskResultStopReason:
+    """Test: TaskResult accepts optional stop_reason."""
+
+    def test_task_result_stop_reason_optional(self):
+        result = TaskResult(
+            passed=False,
+            exit_code=1,
+            failure_reason=None,
+            stop_reason=StopReason.MAX_STEPS,
+        )
+
+        assert result.stop_reason == StopReason.MAX_STEPS
 
 
 class TestTimestampSerialization:

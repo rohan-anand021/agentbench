@@ -83,6 +83,7 @@ Captures the final outcome of the task attempt.
 | `passed` | bool | Yes | Whether the task was completed successfully |
 | `exit_code` | int | Yes | The final pytest exit code |
 | `failure_reason` | FailureReason \| null | No | Enum code if failed, null if passed |
+| `stop_reason` | StopReason \| null | No | Agent stop reason if applicable |
 
 ### ModelConfig
 
