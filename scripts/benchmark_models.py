@@ -203,8 +203,8 @@ def run_agent(
     
     duration = (datetime.now() - start_time).total_seconds()
     
-    # Parse results from output
-    success = "Success" in stdout and "✓" in stdout
+    # Parse results from exit code (run-agent returns non-zero on failure)
+    success = exit_code == 0
     
     result_data = {
         "model": model,

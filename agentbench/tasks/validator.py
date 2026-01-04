@@ -217,7 +217,10 @@ def validate_baseline(
             )
 
             setup_commands = " && ".join(
-                normalize_setup_commands(task.setup.commands)
+                normalize_setup_commands(
+                    task.setup.commands,
+                    run_command=task.run.command,
+                )
             )
             repo_relative_path = "repo"
 
@@ -313,11 +316,19 @@ def validate_baseline(
 
             status_output = _read_log(status_stdout).strip()
             if status_output:
-                attempt.set_failure_reason(
-                    reason=FailureReason.SETUP_DIRTY_WORKTREE
-                )
-                raise RuntimeError(
-                    "setup modified tracked files; baseline invalid"
+                validation = task.validation
+                enforce_clean = True
+                if validation and validation.enforce_clean_setup is not None:
+                    enforce_clean = validation.enforce_clean_setup
+                if enforce_clean:
+                    attempt.set_failure_reason(
+                        reason=FailureReason.SETUP_DIRTY_WORKTREE
+                    )
+                    raise RuntimeError(
+                        "setup modified tracked files; baseline invalid"
+                    )
+                logger.warning(
+                    "Setup modified tracked files; continuing (enforce_clean_setup is false)"
                 )
 
             run_cmd = task.run.command

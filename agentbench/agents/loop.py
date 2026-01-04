@@ -180,12 +180,7 @@ class AgentLoop:
                     and result.error is not None
                     and result.error.error_type == "abnormal_exit"
                 )
-                is_recoverable_file_error = action.tool_request.tool in {
-                    ToolName.LIST_FILES,
-                    ToolName.READ_FILE,
-                    ToolName.SEARCH,
-                }
-                if not is_expected_test_failure and not is_recoverable_file_error:
+                if not is_expected_test_failure:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
                     ).total_seconds()
@@ -261,7 +256,10 @@ class AgentLoop:
         timeout = self.task.environment.timeout_sec
         if needs_setup:
             setup_command = " && ".join(
-                normalize_setup_commands(self.task.setup.commands)
+                normalize_setup_commands(
+                    self.task.setup.commands,
+                    run_command=self.task.run.command,
+                )
             )
             if self.repo_root != self.workspace_root:
                 setup_command = f"cd repo && {setup_command}"
@@ -345,8 +343,9 @@ class AgentLoop:
                 params = RunParams(**request.params)
                 # Check if this is the actual test command or just a shell command
                 is_test_command = self._is_test_command(params.command)
+                needs_setup = self._needs_setup_for_command(params.command)
                 workspace_root = self.repo_root
-                if is_test_command:
+                if needs_setup:
                     setup_needed = (
                         self.task.setup
                         and self.task.setup.commands
@@ -354,11 +353,13 @@ class AgentLoop:
                     )
                     if setup_needed:
                         setup_command = " && ".join(
-                            normalize_setup_commands(self.task.setup.commands)
+                            normalize_setup_commands(
+                                self.task.setup.commands,
+                                run_command=self.task.run.command,
+                            )
                         )
                         if self.repo_root != self.workspace_root:
                             setup_command = f"cd repo && {setup_command}"
-                            workspace_root = self.workspace_root
                         logs_dir = ensure_dir(self.artifacts_dir / "logs")
                         setup_stdout_path = logs_dir / f"setup_step_{step_id:04d}_stdout.txt"
                         setup_stderr_path = logs_dir / f"setup_step_{step_id:04d}_stderr.txt"
@@ -406,6 +407,7 @@ class AgentLoop:
                             )
                         self._setup_completed = True
 
+                if is_test_command:
                     command_parts = []
                     if self.repo_root != self.workspace_root:
                         command_parts.append("cd repo")
@@ -581,10 +583,12 @@ class AgentLoop:
         
         # Check if command is or contains the test command
         # (agent might add cd prefix or other setup)
-        if test_normalized in cmd_normalized or cmd_normalized == test_normalized:
-            return True
+        return test_normalized in cmd_normalized or cmd_normalized == test_normalized
 
-        # Treat pytest invocations as test commands to ensure setup + canonical run.
+    def _needs_setup_for_command(self, command: str) -> bool:
+        if self._is_test_command(command):
+            return True
+        cmd_normalized = " ".join(command.split())
         pytest_pattern = re.compile(
             r"(^|\s)(pytest|python\s+-m\s+pytest|python3\s+-m\s+pytest)(\s|$)"
         )

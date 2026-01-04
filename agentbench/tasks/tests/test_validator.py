@@ -12,6 +12,7 @@ from agentbench.tasks.models import (
     SetupSpec,
     TaskSpec,
     ValidationResult,
+    ValidationSpec,
 )
 from agentbench.tasks.validator import validate_baseline
 
@@ -239,6 +240,179 @@ def test_validate_baseline_returns_valid_when_tests_fail(
 
     assert result.valid is True
     assert result.exit_code == 1
+    assert result.error_reason is None
+
+
+@patch("agentbench.tasks.validator.diff_patch")
+@patch("agentbench.tasks.validator.diff_stat")
+@patch("agentbench.tasks.validator.status_porcelain")
+@patch("agentbench.tasks.validator.DockerSandbox")
+@patch("agentbench.tasks.validator.checkout_commit")
+@patch("agentbench.tasks.validator.clone_repo")
+def test_validate_baseline_dirty_worktree_fails_by_default(
+    mock_clone_repo,
+    mock_checkout_commit,
+    mock_docker_sandbox,
+    mock_status_porcelain,
+    mock_diff_stat,
+    mock_diff_patch,
+    mock_task_spec: TaskSpec,
+    tmp_path: Path,
+):
+    """Dirty worktree after setup fails baseline by default."""
+    mock_clone_repo.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+    mock_checkout_commit.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+
+    (tmp_path / "stdout.txt").touch()
+    (tmp_path / "stderr.txt").touch()
+
+    mock_sandbox_instance = MagicMock()
+    mock_docker_sandbox.return_value = mock_sandbox_instance
+
+    setup_result = Mock(
+        exit_code=0,
+        stdout_path=tmp_path / "setup_stdout.txt",
+        stderr_path=tmp_path / "setup_stderr.txt",
+    )
+    run_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_stdout.txt",
+        stderr_path=tmp_path / "run_stderr.txt",
+    )
+    rerun_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_rerun_stdout.txt",
+        stderr_path=tmp_path / "run_rerun_stderr.txt",
+    )
+    mock_sandbox_instance.run.side_effect = [
+        setup_result,
+        run_result,
+        rerun_result,
+    ]
+
+    status_stdout = tmp_path / "status_stdout.txt"
+    status_stderr = tmp_path / "status_stderr.txt"
+    status_stdout.write_text(" M src/main.py\n", encoding="utf-8", newline="\n")
+    status_stderr.write_text("", encoding="utf-8", newline="\n")
+    mock_status_porcelain.return_value = (
+        status_stdout,
+        status_stderr,
+        0,
+    )
+    mock_diff_stat.return_value = (
+        tmp_path / "diff_stat_stdout.txt",
+        tmp_path / "diff_stat_stderr.txt",
+        0,
+    )
+    mock_diff_patch.return_value = (
+        tmp_path / "diff_stdout.txt",
+        tmp_path / "diff_stderr.txt",
+        0,
+    )
+
+    workspace_dir = tmp_path / "workspace"
+    logs_dir = tmp_path / "logs"
+
+    result = validate_baseline(
+        task=mock_task_spec, workspace_dir=workspace_dir, logs_dir=logs_dir
+    )
+
+    assert result.valid is False
+    assert result.error_reason == FailureReason.SETUP_DIRTY_WORKTREE
+
+
+@patch("agentbench.tasks.validator.diff_patch")
+@patch("agentbench.tasks.validator.diff_stat")
+@patch("agentbench.tasks.validator.status_porcelain")
+@patch("agentbench.tasks.validator.DockerSandbox")
+@patch("agentbench.tasks.validator.checkout_commit")
+@patch("agentbench.tasks.validator.clone_repo")
+def test_validate_baseline_dirty_worktree_allowed_when_disabled(
+    mock_clone_repo,
+    mock_checkout_commit,
+    mock_docker_sandbox,
+    mock_status_porcelain,
+    mock_diff_stat,
+    mock_diff_patch,
+    mock_task_spec: TaskSpec,
+    tmp_path: Path,
+):
+    """Dirty worktree after setup is allowed when enforce_clean_setup is false."""
+    mock_task_spec.validation = ValidationSpec(enforce_clean_setup=False)
+    mock_clone_repo.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+    mock_checkout_commit.return_value = (
+        tmp_path / "stdout.txt",
+        tmp_path / "stderr.txt",
+        0,
+    )
+
+    (tmp_path / "stdout.txt").touch()
+    (tmp_path / "stderr.txt").touch()
+
+    mock_sandbox_instance = MagicMock()
+    mock_docker_sandbox.return_value = mock_sandbox_instance
+
+    setup_result = Mock(
+        exit_code=0,
+        stdout_path=tmp_path / "setup_stdout.txt",
+        stderr_path=tmp_path / "setup_stderr.txt",
+    )
+    run_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_stdout.txt",
+        stderr_path=tmp_path / "run_stderr.txt",
+    )
+    rerun_result = Mock(
+        exit_code=1,
+        stdout_path=tmp_path / "run_rerun_stdout.txt",
+        stderr_path=tmp_path / "run_rerun_stderr.txt",
+    )
+    mock_sandbox_instance.run.side_effect = [
+        setup_result,
+        run_result,
+        rerun_result,
+    ]
+
+    status_stdout = tmp_path / "status_stdout.txt"
+    status_stderr = tmp_path / "status_stderr.txt"
+    status_stdout.write_text(" M src/main.py\n", encoding="utf-8", newline="\n")
+    status_stderr.write_text("", encoding="utf-8", newline="\n")
+    mock_status_porcelain.return_value = (
+        status_stdout,
+        status_stderr,
+        0,
+    )
+    mock_diff_stat.return_value = (
+        tmp_path / "diff_stat_stdout.txt",
+        tmp_path / "diff_stat_stderr.txt",
+        0,
+    )
+    mock_diff_patch.return_value = (
+        tmp_path / "diff_stdout.txt",
+        tmp_path / "diff_stderr.txt",
+        0,
+    )
+
+    workspace_dir = tmp_path / "workspace"
+    logs_dir = tmp_path / "logs"
+
+    result = validate_baseline(
+        task=mock_task_spec, workspace_dir=workspace_dir, logs_dir=logs_dir
+    )
+
+    assert result.valid is True
     assert result.error_reason is None
 
 

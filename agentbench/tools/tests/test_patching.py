@@ -118,6 +118,15 @@ BAD_HUNK_COUNT_PATCH = """\
 +    return 2
 """
 
+BEGIN_PATCH = """\
+*** Begin Patch
+*** Update File: src/main.py
+@@
+-    return 1
++    return 2
+*** End Patch
+"""
+
 
 class TestParseUnifiedDiff:
     """Tests for parse_unified_diff function."""
@@ -386,6 +395,28 @@ class TestApplyPatch:
             assert result.status == ToolStatus.SUCCESS
             content = file_path.read_text()
             assert "return 2" in content
+
+    def test_apply_patch_strict_rejects_begin_patch(self, monkeypatch):
+        """Strict patch mode rejects Begin Patch format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monkeypatch.setenv("AGENTBENCH_STRICT_PATCH", "1")
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_text("def foo():\n    return 1\n")
+
+            params = ApplyPatchParams(unified_diff=BEGIN_PATCH)
+            result = apply_patch(workspace, params, step_id=7, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.ERROR
+            assert result.error is not None
+            assert result.error.error_type == "patch_hunk_fail"
+            assert "Strict patch mode" in result.error.message
+            assert "return 1" in file_path.read_text()
 
 
 class TestApplyPatchEvents:

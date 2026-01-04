@@ -52,6 +52,7 @@ class ValidationSpec(BaseModel):
     expected_stderr_regex: str | None = None
     disallowed_failure_regex: list[str] | None = None
     expected_failing_tests: list[str] | None = None
+    enforce_clean_setup: bool | None = None
 
 
 class AgentSpec(BaseModel):

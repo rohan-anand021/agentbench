@@ -853,23 +853,43 @@ def apply_patch(
             patch_text = normalized_patch
 
     patch_file = _write_patch(patch_text)
+    strip_level = 1
 
-    dry_run = subprocess.run(
-        ["patch", "--batch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
-        capture_output=True,
-        text=True,
-    )
+    def _run_patch_dry(run_strip_level: int) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "patch",
+                "--batch",
+                "--dry-run",
+                f"-p{run_strip_level}",
+                "-d",
+                str(workspace_root),
+                "-i",
+                patch_file,
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    def _dry_run_with_fallback() -> subprocess.CompletedProcess[str]:
+        nonlocal strip_level
+        result = _run_patch_dry(1)
+        if result.returncode != 0 and not strict_patch:
+            alt = _run_patch_dry(0)
+            if alt.returncode == 0:
+                strip_level = 0
+                return alt
+        strip_level = 1
+        return result
+
+    dry_run = _dry_run_with_fallback()
 
     if dry_run.returncode != 0 and not strict_patch:
         normalized_patch, changed = _normalize_hunk_counts(patch_text)
         if changed:
             patch_text = normalized_patch
             patch_file = _write_patch(patch_text)
-            dry_run = subprocess.run(
-                ["patch", "--batch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
-                capture_output=True,
-                text=True,
-            )
+            dry_run = _dry_run_with_fallback()
 
     if dry_run.returncode != 0 and not strict_patch:
         normalized_patch, changed = _normalize_noeof_markers(
@@ -879,11 +899,7 @@ def apply_patch(
         if changed:
             patch_text = normalized_patch
             patch_file = _write_patch(patch_text)
-            dry_run = subprocess.run(
-                ["patch", "--batch", "--dry-run", "-p1", "-d", str(workspace_root), "-i", patch_file],
-                capture_output=True,
-                text=True,
-            )
+            dry_run = _dry_run_with_fallback()
 
     if dry_run.returncode != 0 and not strict_patch:
         if _looks_like_context_patch(patch_text):
@@ -940,7 +956,15 @@ def apply_patch(
         )
 
     subprocess.run(
-        ["patch", "--batch", "-p1", "-d", str(workspace_root), "-i", patch_file],
+        [
+            "patch",
+            "--batch",
+            f"-p{strip_level}",
+            "-d",
+            str(workspace_root),
+            "-i",
+            patch_file,
+        ],
         capture_output=True,
         text=True,
     )

@@ -1,9 +1,7 @@
 import json
 import logging
 import os
-import shutil
 import sys
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -15,20 +13,17 @@ logger = logging.getLogger(__name__)
 
 def append_jsonl(path: Path, record: dict[str, Any] | str) -> bool:
     """
-    Append a record to a JSONL file atomically (dict or JSON string).
+    Append a record to a JSONL file (dict or JSON string).
 
     - Open file in append mode
     - Write JSON + newline
-    - Use atomic write pattern (write to temp, rename)
-    - Handle file locking for concurrent writes
+    - Use file locking for concurrent writes
 
     Returns:
         True if write succeeded, False if write failed (e.g., disk full).
     """
 
     path = Path(path)
-    tmp_path = None
-
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -39,33 +34,16 @@ def append_jsonl(path: Path, record: dict[str, Any] | str) -> bool:
                 json_line = record if record.endswith("\n") else record + "\n"
             else:
                 json_line = json.dumps(record) + "\n"
-
-            with tempfile.NamedTemporaryFile(
-                mode="wb", delete=False, dir=path.parent
-            ) as tmp:
-                tmp_path = Path(tmp.name)
-
-                if path.exists():
-                    with path.open("rb") as src:
-                        shutil.copyfileobj(src, tmp)
-
-                tmp.write(json_line.encode("utf-8"))
-                tmp.flush()
-                os.fsync(tmp.fileno())
-
-            os.replace(tmp_path, path)
+            with open(path, "ab") as f:
+                f.write(json_line.encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
 
         return True
 
     except OSError as e:
         print(f"CRITICAL: Failed to write to {path}: {e}", file=sys.stderr)
         logger.critical("Failed to write JSONL record to %s: %s", path, e)
-
-        if tmp_path is not None and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
 
         return False
 

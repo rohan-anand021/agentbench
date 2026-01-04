@@ -215,6 +215,22 @@ class TestReadFileNotFound:
         assert result.error is not None
         assert result.error.error_type == "file_not_found" or "not found" in result.error.message.lower()
 
+    def test_read_file_not_found_returns_candidates(self, workspace: Path) -> None:
+        """Missing file returns candidates and sample content when available."""
+        result = read_file(
+            request_id="test-008b",
+            workspace_root=workspace,
+            params=ReadFileParams(path="main.py"),
+        )
+
+        assert result.status == ToolStatus.ERROR
+        assert result.error is not None
+        assert result.error.error_type == "file_not_found"
+        assert result.data is not None
+        assert "candidates" in result.data
+        assert "src/main.py" in result.data["candidates"]
+        assert "content" in result.data
+
 
 @requires_ripgrep
 class TestSearchFindsMatches:

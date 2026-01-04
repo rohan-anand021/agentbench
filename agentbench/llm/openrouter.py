@@ -61,7 +61,7 @@ class OpenRouterClient(LLMClient):
 
         if tools:
             body["tools"] = [json.loads(tool.model_dump_json()) for tool in tools]
-            body["tool_choice"] = "required"
+            body["tool_choice"] = "auto"
         
         return body
     

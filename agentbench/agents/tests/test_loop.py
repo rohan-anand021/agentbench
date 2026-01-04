@@ -31,6 +31,8 @@ class DummyEventLogger:
     def log_patch_applied(self, step_id, changed_files, patch_artifact_path): pass
     def log_tests_started(self, command): pass
     def log_tests_finished(self, exit_code, passed, stdout_path=None, stderr_path=None): pass
+    def log_command_started(self, command): pass
+    def log_command_finished(self, exit_code, stdout_path=None, stderr_path=None): pass
 
 
 class SequenceAgent(Agent):
@@ -110,10 +112,14 @@ def make_tool_result(
 
 def make_sandbox(exit_code: int, stdout: str = "", stderr: str = ""):
     def _run(workspace_host_path, command, network, timeout_sec, stdout_path, stderr_path):
+        if "pytest" in command:
+            current_exit = exit_code
+        else:
+            current_exit = 0
         stdout_path.write_text(stdout, encoding="utf-8", newline="\n")
         stderr_path.write_text(stderr, encoding="utf-8", newline="\n")
         return SimpleNamespace(
-            exit_code=exit_code,
+            exit_code=current_exit,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             docker_cmd=[],

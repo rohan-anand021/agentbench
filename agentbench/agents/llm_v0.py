@@ -39,12 +39,20 @@ class LLMAgentV0(Agent):
         self.client = client
         self.event_logger = event_logger or NULL_EVENT_LOGGER
         self._request_counter = 0
+        self._pending_tool_requests: list[ToolRequest] = []
 
     @property
     def variant_name(self) -> str:
         return "llm_v0"
 
     def decide(self, state: AgentState) -> AgentAction:
+        if self._pending_tool_requests:
+            request = self._pending_tool_requests.pop(0)
+            logger.info("Using queued tool request: %s", request.tool)
+            return AgentAction(
+                decision=AgentDecision.CALL_TOOL,
+                tool_request=request,
+            )
         logger.debug("LLM decide called for step %d", state.step_number)
         observation = self.format_observation(state)
         logger.debug("Observation: %s", observation[:500])
@@ -215,65 +223,90 @@ class LLMAgentV0(Agent):
             )
 
         if response.has_tool_calls:
-            tool_call = response.tool_calls[0]
-            if isinstance(tool_call, dict):
-                name = tool_call.get("name") or tool_call.get("tool_name")
-                args_text = tool_call.get("arguments") or tool_call.get("args")
-                call_id = (
-                    tool_call.get("call_id")
-                    or tool_call.get("tool_call_id")
-                    or tool_call.get("id")
-                )
-                function = tool_call.get("function")
-                if not name and isinstance(function, dict):
-                    name = function.get("name")
-                    args_text = args_text or function.get("arguments")
-            else:
-                name = tool_call.name
-                args_text = tool_call.arguments
-                call_id = tool_call.call_id or tool_call.id
-                function = getattr(tool_call, "function", None)
-                if not name and isinstance(function, dict):
-                    name = function.get("name")
-                    args_text = args_text or function.get("arguments")
+            tool_requests: list[ToolRequest] = []
 
-            if isinstance(args_text, dict):
-                params = args_text
-            elif isinstance(args_text, str):
-                try:
-                    params = json.loads(args_text) if args_text else {}
-                except json.JSONDecodeError:
+            def _extract_call(call: Any) -> tuple[str | None, Any, str | None]:
+                if isinstance(call, dict):
+                    call_name = call.get("name") or call.get("tool_name")
+                    call_args = call.get("arguments") or call.get("args")
+                    call_id = (
+                        call.get("call_id")
+                        or call.get("tool_call_id")
+                        or call.get("id")
+                    )
+                    function = call.get("function")
+                    if not call_name and isinstance(function, dict):
+                        call_name = function.get("name")
+                        call_args = call_args or function.get("arguments")
+                    return call_name, call_args, call_id
+
+                call_name = call.name
+                call_args = call.arguments
+                call_id = call.call_id or call.id
+                function = getattr(call, "function", None)
+                if not call_name and isinstance(function, dict):
+                    call_name = function.get("name")
+                    call_args = call_args or function.get("arguments")
+                return call_name, call_args, call_id
+
+            for tool_call in response.tool_calls:
+                name, args_text, call_id = _extract_call(tool_call)
+                if not name:
                     return AgentAction(
                         decision=AgentDecision.STOP,
                         stop_reason=StopReason.LLM_ERROR,
-                        reasoning="Invalid tool arguments JSON.",
+                        reasoning="Tool call missing name.",
                     )
-            elif args_text is None:
-                params = {}
-            else:
+
+                if isinstance(args_text, dict):
+                    params = args_text
+                elif isinstance(args_text, str):
+                    try:
+                        params = json.loads(args_text) if args_text else {}
+                    except json.JSONDecodeError:
+                        return AgentAction(
+                            decision=AgentDecision.STOP,
+                            stop_reason=StopReason.LLM_ERROR,
+                            reasoning="Invalid tool arguments JSON.",
+                        )
+                elif args_text is None:
+                    params = {}
+                else:
+                    return AgentAction(
+                        decision=AgentDecision.STOP,
+                        stop_reason=StopReason.LLM_ERROR,
+                        reasoning="Unsupported tool arguments format.",
+                    )
+
+                try:
+                    tool_enum = ToolName(name)
+                except Exception:
+                    return AgentAction(
+                        decision=AgentDecision.STOP,
+                        stop_reason=StopReason.LLM_ERROR,
+                        reasoning=f"Unknown tool: {name}",
+                    )
+
+                request_id = call_id or self._next_request_id(state)
+                tool_requests.append(
+                    ToolRequest(
+                        tool=tool_enum,
+                        params=params,
+                        request_id=request_id,
+                    )
+                )
+
+            if not tool_requests:
                 return AgentAction(
                     decision=AgentDecision.STOP,
                     stop_reason=StopReason.LLM_ERROR,
-                    reasoning="Unsupported tool arguments format.",
+                    reasoning="No tool calls returned.",
                 )
 
-            try:
-                tool_enum = ToolName(name)
-            except Exception:
-                return AgentAction(
-                    decision=AgentDecision.STOP,
-                    stop_reason=StopReason.LLM_ERROR,
-                    reasoning=f"Unknown tool: {name}",
-                )
-
-            request_id = call_id or self._next_request_id(state)
+            self._pending_tool_requests.extend(tool_requests[1:])
             return AgentAction(
                 decision=AgentDecision.CALL_TOOL,
-                tool_request=ToolRequest(
-                    tool=tool_enum,
-                    params=params,
-                    request_id=request_id,
-                ),
+                tool_request=tool_requests[0],
             )
 
         text = (response.text_content or "").strip()

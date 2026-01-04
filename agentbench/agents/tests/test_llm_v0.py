@@ -5,7 +5,7 @@ from agentbench.agents.llm_v0 import LLMAgentV0
 from agentbench.agents.types import AgentDecision, AgentState, StopReason
 from agentbench.llm.config import LLMConfig, LLMProvider, ProviderConfig
 from agentbench.llm.messages import InputMessage, LLMResponse, MessageRole
-from agentbench.tools.contract import ToolName
+from agentbench.tools.contract import ToolName, ToolRequest, ToolResult, ToolStatus
 
 
 class StubLLMClient:
@@ -13,7 +13,7 @@ class StubLLMClient:
         self.response = response
         self.calls = []
 
-    async def complete(self, input_items, tools=None):
+    async def complete(self, input_items, tools=None, event_logger=None):
         self.calls.append({"input": input_items, "tools": tools})
         return self.response
 
@@ -77,6 +77,48 @@ def test_decide_returns_tool_request_from_response():
     assert action.tool_request is not None
     assert action.tool_request.tool == ToolName.SEARCH
     assert action.tool_request.params["query"] == "def add"
+
+
+def test_decide_queues_multiple_tool_calls():
+    response = LLMResponse.model_validate(
+        {
+            "id": "resp-multi",
+            "object": "response",
+            "created_at": 123,
+            "model": "mistralai/devstral-2512:free",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc-1",
+                    "call_id": "call-1",
+                    "name": "list_files",
+                    "arguments": json.dumps({"root": "."}),
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-2",
+                    "call_id": "call-2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "src/toy/mathy.py"}),
+                },
+            ],
+            "usage": None,
+            "error": None,
+            "latency_ms": 0,
+        }
+    )
+    agent = make_agent(response)
+    state = make_state()
+
+    first_action = agent.decide(state)
+    second_action = agent.decide(state)
+
+    assert first_action.decision == AgentDecision.CALL_TOOL
+    assert first_action.tool_request.tool == ToolName.LIST_FILES
+    assert second_action.decision == AgentDecision.CALL_TOOL
+    assert second_action.tool_request.tool == ToolName.READ_FILE
+    assert len(agent.client.calls) == 1
 
 
 def test_decide_stops_on_text_only_response():
@@ -490,3 +532,96 @@ def test_get_tool_definitions_returns_all_tools():
     assert "search" in tool_names
     assert "apply_patch" in tool_names
     assert "run" in tool_names
+
+
+def test_decide_falls_back_to_read_file_from_list_files():
+    """Fallback to read_file when no tool call is returned."""
+    response = LLMResponse.model_validate(
+        {
+            "id": "resp-fallback",
+            "object": "response",
+            "created_at": 123,
+            "model": "mistralai/devstral-2512:free",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg-fb",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": ""}],
+                }
+            ],
+            "usage": None,
+            "error": None,
+            "latency_ms": 0,
+        }
+    )
+    agent = make_agent(response)
+    state = make_state()
+    list_request = ToolRequest(
+        tool=ToolName.LIST_FILES,
+        params={"root": "."},
+        request_id="list-1",
+    )
+    list_result = ToolResult(
+        request_id="list-1",
+        tool=ToolName.LIST_FILES,
+        status=ToolStatus.SUCCESS,
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        duration_sec=0.0,
+        data={"files": ["src/main.py", "src/utils.py"]},
+    )
+    state.tool_history = [(list_request, list_result)]
+
+    action = agent.decide(state)
+
+    assert action.decision == AgentDecision.CALL_TOOL
+    assert action.tool_request is not None
+    assert action.tool_request.tool == ToolName.READ_FILE
+    assert action.tool_request.params["path"] == "src/main.py"
+
+
+def test_decide_extracts_unified_diff_block():
+    """Diff code blocks are parsed into apply_patch tool calls."""
+    diff_text = (
+        "Here is the patch:\n"
+        "```diff\n"
+        "--- a/src/main.py\n"
+        "+++ b/src/main.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-foo\n"
+        "+bar\n"
+        "```\n"
+    )
+    response = LLMResponse.model_validate(
+        {
+            "id": "resp-diff",
+            "object": "response",
+            "created_at": 123,
+            "model": "mistralai/devstral-2512:free",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg-diff",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": diff_text}],
+                }
+            ],
+            "usage": None,
+            "error": None,
+            "latency_ms": 0,
+        }
+    )
+    agent = make_agent(response)
+    state = make_state()
+
+    action = agent.decide(state)
+
+    assert action.decision == AgentDecision.CALL_TOOL
+    assert action.tool_request is not None
+    assert action.tool_request.tool == ToolName.APPLY_PATCH
+    assert action.tool_request.params["unified_diff"].startswith("--- a/src/main.py")

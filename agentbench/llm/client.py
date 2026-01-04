@@ -6,6 +6,7 @@ from agentbench.llm.messages import (
     ToolDefinition,
     LLMResponse,
 )
+from agentbench.util.events import EventLogger, NullEventLogger
 
 
 class LLMClient(ABC):
@@ -18,7 +19,8 @@ class LLMClient(ABC):
     async def complete(
         self,
         input_items: list[InputItem],
-        tools: list[ToolDefinition] | None = None
+        tools: list[ToolDefinition] | None = None,
+        event_logger: EventLogger | NullEventLogger | None = None,
     ) -> LLMResponse:
         """Send a completion request to the LLM.
         

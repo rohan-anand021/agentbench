@@ -254,19 +254,10 @@ def read_file(
             candidate_data["not_found"] = True
             candidate_data["candidates"] = suggestion_paths
             data = candidate_data
-        ended_at = datetime.now()
-        return ToolResult(
-            request_id=request_id,
-            tool=ToolName.READ_FILE,
-            status=ToolStatus.SUCCESS,
-            started_at=started_at,
-            ended_at=ended_at,
-            duration_sec=(ended_at - started_at).total_seconds(),
-            data=data,
-            error=None,
-            exit_code=None,
-            stdout_path=None,
-            stderr_path=None,
+        error = ToolError(
+            error_type="file_not_found",
+            message=f"File not found: {params.path}",
+            details={"candidates": suggestion_paths},
         )
     except UnicodeDecodeError as e:
         error = ToolError(

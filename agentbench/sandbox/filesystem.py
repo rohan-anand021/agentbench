@@ -37,7 +37,11 @@ def resolve_safe_path(
     workspace_prefix = "/workspace"
     repo_prefix = "/workspace/repo"
 
-    if relative_path == repo_prefix:
+    if relative_path == "repo":
+        relative_path = ""
+    elif relative_path.startswith("repo/"):
+        relative_path = relative_path[len("repo/"):]
+    elif relative_path == repo_prefix:
         relative_path = ""
     elif relative_path.startswith(f"{repo_prefix}/"):
         relative_path = relative_path[len(repo_prefix) + 1:]
@@ -97,5 +101,4 @@ def safe_glob(
 
     logger.debug("safe_glob matched %d files for pattern %s", len(files), pattern)
     return sorted(files)
-
 

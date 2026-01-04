@@ -88,6 +88,7 @@ def validate_task_yaml(task: dict, task_yaml: Path) -> None:
                     "expected_stderr_regex": str,
                     "disallowed_failure_regex": ListOf(str),
                     "expected_failing_tests": ListOf(str),
+                    "enforce_clean_setup": bool,
                 },
             ),
             "harness_min_version": str,
