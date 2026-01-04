@@ -102,6 +102,21 @@ def run_agent_cmd(
         "-o",
         help="Output directory for artifacts",
     ),
+    log_llm_messages: bool | None = typer.Option(
+        None,
+        "--log-llm-messages/--no-log-llm-messages",
+        help="Write LLM request/response pairs to llm_messages.jsonl.",
+    ),
+    strict_patch: bool = typer.Option(
+        False,
+        "--strict-patch/--no-strict-patch",
+        help="Require strict unified diff patches (no auto-normalization).",
+    ),
+    skip_baseline: bool = typer.Option(
+        False,
+        "--skip-baseline",
+        help="Skip baseline validation before running the agent.",
+    ),
 ):
     """
     Run an agent on a single task.
@@ -125,6 +140,11 @@ def run_agent_cmd(
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         
         console.print(f"[bold blue]Running agent '{variant}' on task '{task.id}'...[/bold blue]")
+
+        if strict_patch:
+            os.environ["AGENTBENCH_STRICT_PATCH"] = "1"
+        else:
+            os.environ.pop("AGENTBENCH_STRICT_PATCH", None)
         
         llm_config = None
         llm_client = None
@@ -154,6 +174,8 @@ def run_agent_cmd(
             llm_config=llm_config,
             llm_client=llm_client,
             variant_override=variant,
+            log_llm_messages=log_llm_messages,
+            skip_baseline=skip_baseline,
         )
         
         print_agent_summary(record)

@@ -149,6 +149,30 @@ class TestDockerSandboxCommandBuilding:
             assert "-c" in cmd
             assert "pytest tests/" in cmd
 
+    def test_builds_command_with_env(self, tmp_path: Path):
+        """Env variables are passed through to docker run."""
+        sandbox = DockerSandbox(image="python:3.11", workdir="/workspace")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            sandbox.run(
+                workspace_host_path=workspace,
+                command="python -V",
+                network="none",
+                timeout_sec=60,
+                stdout_path=tmp_path / "stdout.txt",
+                stderr_path=tmp_path / "stderr.txt",
+                env={"PYTHONPATH": "/workspace/site-packages", "LANG": "en_US.UTF-8"},
+            )
+
+            call_args = mock_run.call_args
+            cmd = call_args.kwargs.get("args") or call_args[1].get("args")
+
+            assert "PYTHONPATH=/workspace/site-packages" in cmd
+            assert "LANG=en_US.UTF-8" in cmd
+
 
 class TestDockerSandboxTimeout:
     """Tests for timeout handling."""

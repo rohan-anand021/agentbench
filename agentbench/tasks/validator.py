@@ -15,6 +15,7 @@ from agentbench.util.git import (
     diff_stat,
     status_porcelain,
 )
+from agentbench.util.commands import normalize_setup_commands
 from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,9 @@ def validate_baseline(
                 workdir=task.environment.workdir,
             )
 
-            setup_commands = " && ".join(task.setup.commands)
+            setup_commands = " && ".join(
+                normalize_setup_commands(task.setup.commands)
+            )
             repo_relative_path = "repo"
 
             logger.info("Running setup commands")

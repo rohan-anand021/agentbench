@@ -55,15 +55,30 @@ def list_files(
     started_at = datetime.now()
 
     try:
+        workspace_root = Path(workspace_root).resolve()
         root_path = resolve_safe_path(
             workspace_root = workspace_root,
             relative_path = params.root
         )
+        if not root_path.exists():
+            raise FileNotFoundError(f"Root path does not exist: {params.root}")
 
+        glob_pattern = params.glob
         files = safe_glob(
             workspace_root = root_path,
-            pattern = params.glob
+            pattern = glob_pattern
         )
+        if (
+            not files
+            and glob_pattern
+            and "**" not in glob_pattern
+            and "/" not in glob_pattern
+        ):
+            glob_pattern = f"**/{glob_pattern}"
+            files = safe_glob(
+                workspace_root = root_path,
+                pattern = glob_pattern
+            )
 
         logger.debug("list_files found %d files in %s", len(files), params.root)
         file_paths = []
@@ -72,7 +87,7 @@ def list_files(
                 file_paths.append(str(f.relative_to(workspace_root)))
             except ValueError:
                 file_paths.append(str(f))
-        data = {"files": file_paths}
+        data = {"files": file_paths, "glob": glob_pattern}
 
     except PathEscapeError as e:
         error = ToolError(
@@ -83,6 +98,12 @@ def list_files(
     except SymLinkError as e:
         error = ToolError(
             error_type="symlink_blocked",
+            message=str(e),
+            details={}
+        )
+    except FileNotFoundError as e:
+        error = ToolError(
+            error_type="file_not_found",
             message=str(e),
             details={}
         )
@@ -140,42 +161,112 @@ def read_file(
             relative_path = params.path
         )
 
-        first_lines: list[str] = []
-        last_buffer = deque(maxlen=5000)
-        total_lines = 0
+        def _read_text_data(path: Path) -> dict[str, Any]:
+            first_lines: list[str] = []
+            last_buffer = deque(maxlen=5000)
+            total_lines = 0
 
-        with root_path.open('r', encoding = 'utf-8') as f:
-            for i, line in enumerate(f, start=1):
-                total_lines = i
-                stripped = line.rstrip('\n')
+            with path.open('r', encoding = 'utf-8') as f:
+                for i, line in enumerate(f, start=1):
+                    total_lines = i
+                    stripped = line.rstrip('\n')
 
-                if i <= 5000:
-                    first_lines.append(stripped)
-                else:
-                    last_buffer.append(stripped)
+                    if i <= 5000:
+                        first_lines.append(stripped)
+                    else:
+                        last_buffer.append(stripped)
 
-        if total_lines <= 10000:
-            file_content = "\n".join(first_lines + list(last_buffer))
-            truncated = False
-        else:
-            file_content = "\n".join(first_lines) + "\n\n... [truncated] ...\n\n" + "\n".join(last_buffer)
-            truncated = True
+            if total_lines <= 10000:
+                file_content = "\n".join(first_lines + list(last_buffer))
+                truncated = False
+            else:
+                file_content = "\n".join(first_lines) + "\n\n... [truncated] ...\n\n" + "\n".join(last_buffer)
+                truncated = True
 
+            return {
+                "content": file_content,
+                "truncated": truncated,
+                "total_lines": total_lines,
+                "start_line": 1,
+                "end_line": total_lines if not truncated else None,
+                "lines_included": None if not truncated else f"1-5000, {total_lines - 4999}-{total_lines}"
+            }
+        if root_path.is_dir():
+            entries = safe_glob(root_path, "*")
+            entry_names = []
+            for entry in entries:
+                try:
+                    entry_names.append(str(entry.relative_to(root_path)))
+                except ValueError:
+                    entry_names.append(str(entry))
+            data = {
+                "content": (
+                    f"{params.path} is a directory. "
+                    f"Entries: {entry_names}"
+                ),
+                "is_directory": True,
+                "entries": entry_names,
+            }
+            ended_at = datetime.now()
+            return ToolResult(
+                request_id=request_id,
+                tool=ToolName.READ_FILE,
+                status=ToolStatus.SUCCESS,
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_sec=(ended_at - started_at).total_seconds(),
+                data=data,
+                error=None,
+                exit_code=None,
+                stdout_path=None,
+                stderr_path=None,
+            )
+
+        data = _read_text_data(root_path)
+        logger.debug(
+            "read_file read %d lines from %s, truncated=%s",
+            data.get("total_lines"),
+            params.path,
+            data.get("truncated"),
+        )
+
+    except FileNotFoundError:
+        name = Path(params.path).name
+        suggestions = safe_glob(workspace_root, f"**/{name}") if name else []
+        suggestion_paths = []
+        for suggestion in suggestions[:20]:
+            try:
+                suggestion_paths.append(str(suggestion.relative_to(workspace_root)))
+            except ValueError:
+                suggestion_paths.append(str(suggestion))
         data = {
-            "content": file_content,
-            "truncated": truncated,
-            "total_lines": total_lines,
-            "start_line": 1,
-            "end_line": total_lines if not truncated else None,
-            "lines_included": None if not truncated else f"1-5000, {total_lines - 4999}-{total_lines}"
+            "content": (
+                f"File does not exist: {params.path}. "
+                f"Candidates: {suggestion_paths}"
+            ),
+            "not_found": True,
+            "candidates": suggestion_paths,
         }
-        logger.debug("read_file read %d lines from %s, truncated=%s", total_lines, params.path, truncated)
-
-    except FileNotFoundError as e:
-        error = ToolError(
-            error_type="file_not_found",
-            message=f"File does not exist: {params.path}",
-            details={"path": params.path}
+        if suggestions:
+            candidate = suggestions[0]
+            candidate_data = _read_text_data(candidate)
+            candidate_data["resolved_path"] = suggestion_paths[0]
+            candidate_data["not_found"] = True
+            candidate_data["candidates"] = suggestion_paths
+            data = candidate_data
+        ended_at = datetime.now()
+        return ToolResult(
+            request_id=request_id,
+            tool=ToolName.READ_FILE,
+            status=ToolStatus.SUCCESS,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_sec=(ended_at - started_at).total_seconds(),
+            data=data,
+            error=None,
+            exit_code=None,
+            stdout_path=None,
+            stderr_path=None,
         )
     except UnicodeDecodeError as e:
         error = ToolError(
@@ -460,13 +551,17 @@ def run_tool(
         }
 
     try:
+        network = params.network or "none"
+        if network not in ("none", "bridge"):
+            raise ValueError(f"Invalid network setting: {network}")
         run_result = sandbox.run(
             workspace_host_path = workspace_root,
             command = params.command,
-            network = "none",
+            network = network,
             timeout_sec = params.timeout_sec if params.timeout_sec else 60,
             stdout_path = artifacts_dir / "logs" / f"tool_step_{step_id:04d}_stdout.txt",
             stderr_path = artifacts_dir / "logs" / f"tool_step_{step_id:04d}_stderr.txt",
+            env = params.env,
         )
         exit_code = run_result.exit_code
         stdout_path = run_result.stdout_path

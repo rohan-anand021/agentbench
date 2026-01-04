@@ -1,5 +1,8 @@
+import asyncio
+import httpx
 import pytest
 from pydantic import SecretStr
+from agentbench.llm import openrouter as openrouter_module
 from agentbench.llm.openrouter import OpenRouterClient, OPENROUTER_API_URL
 from agentbench.llm.config import LLMConfig, ProviderConfig, LLMProvider, SamplingParams
 from agentbench.llm.messages import (
@@ -165,3 +168,76 @@ class TestClientProperties:
 
     def test_api_url_constant(self):
         assert OPENROUTER_API_URL == "https://openrouter.ai/api/v1/responses"
+
+
+class FakeResponse:
+    def __init__(self, status_code: int, body: dict):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class FakeClient:
+    def __init__(self, responses: list[object], state: dict[str, int]):
+        self._responses = responses
+        self._state = state
+
+    async def post(self, _url: str, json: dict):
+        index = self._state["index"]
+        self._state["index"] += 1
+        response = self._responses[index]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    async def aclose(self):
+        return None
+
+
+def test_complete_retries_on_network_error(monkeypatch: pytest.MonkeyPatch):
+    config = make_config()
+    config.retry_policy.max_retries = 1
+    config.retry_policy.initial_delay_sec = 1.0
+    config.retry_policy.max_delay_sec = 1.0
+    config.retry_policy.exponential_base = 1.0
+    client = OpenRouterClient(config)
+
+    state = {"index": 0}
+    response_body = {
+        "id": "resp_123",
+        "model": "test-model",
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    responses: list[object] = [
+        httpx.RequestError("boom", request=httpx.Request("POST", OPENROUTER_API_URL)),
+        FakeResponse(200, response_body),
+    ]
+
+    async def fake_get_client(self):
+        return FakeClient(responses, state)
+
+    async def fake_sleep(_delay: float):
+        return None
+
+    monkeypatch.setattr(OpenRouterClient, "_get_client", fake_get_client)
+    monkeypatch.setattr(openrouter_module.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(
+        client.complete(
+            [InputMessage(role=MessageRole.USER, content="hello")],
+            tools=None,
+        )
+    )
+
+    assert result.status == "completed"
+    assert state["index"] == 2

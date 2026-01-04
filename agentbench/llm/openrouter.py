@@ -1,3 +1,4 @@
+import asyncio
 import json
 import httpx
 from pydantic import ValidationError
@@ -60,7 +61,7 @@ class OpenRouterClient(LLMClient):
 
         if tools:
             body["tools"] = [json.loads(tool.model_dump_json()) for tool in tools]
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = "required"
         
         return body
     
@@ -92,93 +93,166 @@ class OpenRouterClient(LLMClient):
         event_logger: EventLogger | NullEventLogger | None = None
     ) -> LLMResponse:
         logger = event_logger or NULL_EVENT_LOGGER
-        client = await self._get_client()
+        request_body = self._build_request_body(input_items, tools)
+        retry_policy = self.config.retry_policy
+        max_attempts = retry_policy.max_retries + 1
+        attempt = 0
+        last_error: LLMError | None = None
 
-        logger.log_llm_request_started(
-            model=self.model_name,
-            message_count=len(input_items),
-            has_tools=tools is not None
-        )
-
-        try:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                json=self._build_request_body(input_items, tools)
+        while attempt < max_attempts:
+            attempt += 1
+            client = await self._get_client()
+            logger.log_llm_request_started(
+                model=self.model_name,
+                message_count=len(input_items),
+                has_tools=tools is not None
             )
+
             try:
-                response_body = response.json()
-            except ValueError:
-                response_body = None
-            if response_body is not None and not isinstance(response_body, dict):
-                response_body = None
+                response = await client.post(
+                    OPENROUTER_API_URL,
+                    json=request_body
+                )
+                try:
+                    response_body = response.json()
+                except ValueError:
+                    response_body = None
+                if response_body is not None and not isinstance(response_body, dict):
+                    response_body = None
 
-            if response.status_code != 200:
-                raise self._classify_error(response.status_code, response_body)
+                if response.status_code != 200:
+                    raise self._classify_error(response.status_code, response_body)
 
-            if response_body is None:
-                raise LLMError(
-                    LLMErrorType.INVALID_RESPONSE,
-                    "Non-JSON response from provider",
-                    retryable=True,
+                if response_body is None:
+                    raise LLMError(
+                        LLMErrorType.INVALID_RESPONSE,
+                        "Non-JSON response from provider",
+                        retryable=True,
+                    )
+
+                try:
+                    result = LLMResponse.model_validate(response_body)
+                except ValidationError as e:
+                    raise LLMError(
+                        LLMErrorType.INVALID_RESPONSE,
+                        f"Invalid response schema: {e.errors()[:1]}",
+                        retryable=False,
+                    ) from e
+
+                logger.log_llm_request_finished(
+                    request_id=result.id or "",
+                    status=result.status or "",
+                    latency_ms=result.latency_ms or 0,
+                    tokens_used=result.usage.total_tokens if result.usage else 0,
+                    has_tool_calls=result.has_tool_calls
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=result.model_dump(mode="json"),
+                    error=None,
                 )
 
-            try:
-                result = LLMResponse.model_validate(response_body)
-            except ValidationError as e:
-                raise LLMError(
-                    LLMErrorType.INVALID_RESPONSE,
-                    f"Invalid response schema: {e.errors()[:1]}",
-                    retryable=False,
-                ) from e
+                return result
 
-            logger.log_llm_request_finished(
-                request_id=result.id or "",
-                status=result.status or "",
-                latency_ms=result.latency_ms or 0,
-                tokens_used=result.usage.total_tokens if result.usage else 0,
-                has_tool_calls=result.has_tool_calls
-            )
+            except httpx.TimeoutException as e:
+                error = TimeoutError(
+                    f"Request timed out after {self.config.provider_config.timeout_sec} seconds"
+                )
+                logger.log_llm_request_failed(
+                    error_type=LLMErrorType.TIMEOUT.value,
+                    message=str(e),
+                    retryable=True
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=None,
+                    error={
+                        "error_type": LLMErrorType.TIMEOUT.value,
+                        "message": str(e),
+                        "retryable": True,
+                    },
+                )
+            except httpx.HTTPStatusError as e:
+                error = self._classify_error(e.response.status_code, e.response.json())
+                logger.log_llm_request_failed(
+                    error_type=error.error_type.value,
+                    message=str(error),
+                    retryable=error.retryable
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=None,
+                    error={
+                        "error_type": error.error_type.value,
+                        "message": str(error),
+                        "retryable": error.retryable,
+                    },
+                )
+            except httpx.RequestError as e:
+                error = LLMError(LLMErrorType.NETWORK_ERROR, str(e), retryable=True)
+                logger.log_llm_request_failed(
+                    error_type=LLMErrorType.NETWORK_ERROR.value,
+                    message=str(e),
+                    retryable=True
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=None,
+                    error={
+                        "error_type": LLMErrorType.NETWORK_ERROR.value,
+                        "message": str(e),
+                        "retryable": True,
+                    },
+                )
+            except LLMError as e:
+                error = e
+                logger.log_llm_request_failed(
+                    error_type=e.error_type.value,
+                    message=str(e),
+                    retryable=e.retryable,
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=None,
+                    error={
+                        "error_type": e.error_type.value,
+                        "message": str(e),
+                        "retryable": e.retryable,
+                    },
+                )
+            except Exception as e:
+                error = LLMError(LLMErrorType.PROVIDER_ERROR, str(e))
+                logger.log_llm_request_failed(
+                    error_type=LLMErrorType.PROVIDER_ERROR.value,
+                    message=str(e),
+                    retryable=False
+                )
+                logger.log_llm_messages(
+                    request=request_body,
+                    response=None,
+                    error={
+                        "error_type": LLMErrorType.PROVIDER_ERROR.value,
+                        "message": str(e),
+                        "retryable": False,
+                    },
+                )
+            finally:
+                await client.aclose()
 
-            return result
-        
-        except httpx.TimeoutException as e:
-            logger.log_llm_request_failed(
-                error_type=LLMErrorType.TIMEOUT.value,
-                message=str(e),
-                retryable=True
+            last_error = error
+            if not error.retryable or attempt >= max_attempts:
+                raise error
+
+            delay = min(
+                retry_policy.max_delay_sec,
+                retry_policy.initial_delay_sec * (retry_policy.exponential_base ** (attempt - 1)),
             )
-            raise TimeoutError(f"Request timed out after {self.config.provider_config.timeout_sec} seconds") from e
-        except httpx.HTTPStatusError as e:
-            error = self._classify_error(e.response.status_code, e.response.json())
-            logger.log_llm_request_failed(
-                error_type=error.error_type.value,
-                message=str(error),
-                retryable=error.retryable
-            )
-            raise error from e
-        except httpx.RequestError as e:
-            logger.log_llm_request_failed(
-                error_type=LLMErrorType.NETWORK_ERROR.value,
-                message=str(e),
-                retryable=True
-            )
-            raise LLMError(LLMErrorType.NETWORK_ERROR, str(e), retryable=True) from e
-        except LLMError as e:
-            logger.log_llm_request_failed(
-                error_type=e.error_type.value,
-                message=str(e),
-                retryable=e.retryable,
-            )
-            raise
-        except Exception as e:
-            logger.log_llm_request_failed(
-                error_type=LLMErrorType.PROVIDER_ERROR.value,
-                message=str(e),
-                retryable=False
-            )
-            raise LLMError(LLMErrorType.PROVIDER_ERROR, str(e)) from e
-        finally:
-            await client.aclose()
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        if last_error is not None:
+            raise last_error
+        raise LLMError(LLMErrorType.UNKNOWN, "Unknown OpenRouter error", retryable=False)
 
     def count_tokens(self, input_items: list[InputItem]) -> int:
         total_chars = sum(len(str(item.model_dump())) for item in input_items)

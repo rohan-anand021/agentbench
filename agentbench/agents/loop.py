@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from agentbench.tools.contract import (
     ToolStatus,
 )
 from agentbench.tools.patching import apply_patch
+from agentbench.util.commands import normalize_setup_commands
 from agentbench.util.events import EventLogger
 from agentbench.util.paths import ensure_dir
 from agentbench.util.truncation import truncate_output
@@ -64,6 +66,7 @@ class AgentLoop:
         self.event_logger = event_logger
         self.budget = budget or AgentBudget()
         self._tool_step_counter = 0
+        self._setup_completed = False
 
     def run(self) -> AgentResult:
         started_at = datetime.now(timezone.utc)
@@ -177,7 +180,12 @@ class AgentLoop:
                     and result.error is not None
                     and result.error.error_type == "abnormal_exit"
                 )
-                if not is_expected_test_failure:
+                is_recoverable_file_error = action.tool_request.tool in {
+                    ToolName.LIST_FILES,
+                    ToolName.READ_FILE,
+                    ToolName.SEARCH,
+                }
+                if not is_expected_test_failure and not is_recoverable_file_error:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
                     ).total_seconds()
@@ -189,6 +197,40 @@ class AgentLoop:
                         duration_sec=duration,
                         final_test_exit_code=state.last_test_exit_code,
                         final_test_passed=False,
+                    )
+
+            if (
+                action.tool_request.tool == ToolName.APPLY_PATCH
+                and result.status == ToolStatus.SUCCESS
+            ):
+                auto_request = ToolRequest(
+                    tool=ToolName.RUN,
+                    params={"command": self.task.run.command},
+                    request_id=f"auto_run_{state.step_number}",
+                )
+                auto_action = AgentAction(
+                    decision=AgentDecision.CALL_TOOL,
+                    tool_request=auto_request,
+                )
+                auto_result = self._execute_tool(auto_request)
+                state = self._update_state(state, auto_action, auto_result)
+                is_test = (
+                    auto_result.data.get("is_test_command", False)
+                    if auto_result.data
+                    else False
+                )
+                if is_test and auto_result.exit_code == 0:
+                    duration = (
+                        datetime.now(timezone.utc) - state.started_at
+                    ).total_seconds()
+                    return AgentResult(
+                        success=True,
+                        stop_reason=StopReason.SUCCESS,
+                        steps_taken=state.step_number,
+                        patches_applied=state.patches_applied,
+                        duration_sec=duration,
+                        final_test_exit_code=auto_result.exit_code,
+                        final_test_passed=True,
                     )
 
             # Only count success when the actual TEST command passes, not arbitrary shell commands
@@ -212,35 +254,44 @@ class AgentLoop:
         logs_dir = ensure_dir(self.artifacts_dir / "logs")
         stdout_path = logs_dir / "step_0001_stdout.txt"
         stderr_path = logs_dir / "step_0001_stderr.txt"
+        setup_stdout_path = logs_dir / "setup_stdout.txt"
+        setup_stderr_path = logs_dir / "setup_stderr.txt"
 
-        # Build command with setup + test in single container run
-        # All commands should run from repo directory
-        command_parts = []
+        needs_setup = bool(self.task.setup and self.task.setup.commands)
+        timeout = self.task.environment.timeout_sec
+        if needs_setup:
+            setup_command = " && ".join(
+                normalize_setup_commands(self.task.setup.commands)
+            )
+            if self.repo_root != self.workspace_root:
+                setup_command = f"cd repo && {setup_command}"
+            setup_timeout = max(timeout, 180)  # At least 3 minutes for setup
+            setup_result = self.sandbox.run(
+                workspace_host_path=self.workspace_root,
+                command=setup_command,
+                network="bridge",
+                timeout_sec=setup_timeout,
+                stdout_path=setup_stdout_path,
+                stderr_path=setup_stderr_path,
+            )
+            if setup_result.exit_code != 0:
+                output = self._read_and_truncate_output(
+                    setup_stdout_path,
+                    setup_stderr_path,
+                )
+                return setup_result.exit_code, output
+            self._setup_completed = True
+
+        test_command = self.task.run.command
         if self.repo_root != self.workspace_root:
-            command_parts.append("cd repo")
-        
-        # Add setup commands if present (run in same container)
-        if self.task.setup and self.task.setup.commands:
-            command_parts.extend(self.task.setup.commands)
-        
-        # Add the test command
-        command_parts.append(self.task.run.command)
-        
-        command = " && ".join(command_parts)
+            test_command = f"cd repo && {test_command}"
 
         self.event_logger.log_tests_started(command=self.task.run.command)
-
-        # Use bridge network if setup commands need network (for pip install)
-        needs_network = self.task.setup and self.task.setup.commands
-        # Give more time when running setup commands (pip install can be slow)
-        timeout = self.task.environment.timeout_sec
-        if needs_network:
-            timeout = max(timeout, 180)  # At least 3 minutes for setup
-        result = self.sandbox.run(
+        test_result = self.sandbox.run(
             workspace_host_path=self.workspace_root,
-            command=command,
-            network="bridge" if needs_network else "none",
-            timeout_sec=timeout,
+            command=test_command,
+            network="none",
+            timeout_sec=timeout if not needs_setup else max(timeout, 180),
             stdout_path=stdout_path,
             stderr_path=stderr_path,
         )
@@ -248,13 +299,13 @@ class AgentLoop:
         output = self._read_and_truncate_output(stdout_path, stderr_path)
 
         self.event_logger.log_tests_finished(
-            exit_code=result.exit_code,
-            passed=result.exit_code == 0,
+            exit_code=test_result.exit_code,
+            passed=test_result.exit_code == 0,
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
         )
 
-        return result.exit_code, output
+        return test_result.exit_code, output
 
     def _execute_tool(self, request: ToolRequest) -> ToolResult:
         self.event_logger.log_tool_started(request)
@@ -279,6 +330,7 @@ class AgentLoop:
                 result = apply_patch(self.repo_root, params, step_id, diffs_dir)
                 result.request_id = request.request_id
                 if result.status == ToolStatus.SUCCESS:
+                    self._setup_completed = False
                     patch_path = diffs_dir / f"step_{step_id:04d}.patch"
                     if result.data is None:
                         result.data = {}
@@ -293,12 +345,79 @@ class AgentLoop:
                 params = RunParams(**request.params)
                 # Check if this is the actual test command or just a shell command
                 is_test_command = self._is_test_command(params.command)
+                workspace_root = self.repo_root
+                if is_test_command:
+                    setup_needed = (
+                        self.task.setup
+                        and self.task.setup.commands
+                        and not self._setup_completed
+                    )
+                    if setup_needed:
+                        setup_command = " && ".join(
+                            normalize_setup_commands(self.task.setup.commands)
+                        )
+                        if self.repo_root != self.workspace_root:
+                            setup_command = f"cd repo && {setup_command}"
+                            workspace_root = self.workspace_root
+                        logs_dir = ensure_dir(self.artifacts_dir / "logs")
+                        setup_stdout_path = logs_dir / f"setup_step_{step_id:04d}_stdout.txt"
+                        setup_stderr_path = logs_dir / f"setup_step_{step_id:04d}_stderr.txt"
+                        self.event_logger.log_command_started(command=setup_command)
+                        setup_timeout = max(self.task.environment.timeout_sec, 180)
+                        setup_result = self.sandbox.run(
+                            workspace_host_path=self.workspace_root,
+                            command=setup_command,
+                            network="bridge",
+                            timeout_sec=setup_timeout,
+                            stdout_path=setup_stdout_path,
+                            stderr_path=setup_stderr_path,
+                        )
+                        self.event_logger.log_command_finished(
+                            exit_code=setup_result.exit_code,
+                            stdout_path=str(setup_stdout_path),
+                            stderr_path=str(setup_stderr_path),
+                        )
+                        if setup_result.exit_code != 0:
+                            output = self._read_and_truncate_output(
+                                setup_stdout_path,
+                                setup_stderr_path,
+                            )
+                            ended_at = datetime.now(timezone.utc)
+                            return ToolResult(
+                                request_id=request.request_id,
+                                tool=request.tool,
+                                status=ToolStatus.ERROR,
+                                started_at=started_at,
+                                ended_at=ended_at,
+                                duration_sec=(ended_at - started_at).total_seconds(),
+                                data={
+                                    "combined_output": output,
+                                    "is_test_command": True,
+                                    "setup_failed": True,
+                                },
+                                error=ToolError(
+                                    error_type="setup_failed",
+                                    message="Setup command failed",
+                                    details={"exit_code": setup_result.exit_code},
+                                ),
+                                exit_code=setup_result.exit_code,
+                                stdout_path=str(setup_stdout_path),
+                                stderr_path=str(setup_stderr_path),
+                            )
+                        self._setup_completed = True
+
+                    command_parts = []
+                    if self.repo_root != self.workspace_root:
+                        command_parts.append("cd repo")
+                        workspace_root = self.workspace_root
+                    command_parts.append(self.task.run.command)
+                    params.command = " && ".join(command_parts)
                 if is_test_command:
                     self.event_logger.log_tests_started(command=params.command)
                 else:
                     self.event_logger.log_command_started(command=params.command)
                 result = run_tool(
-                    workspace_root=self.repo_root,
+                    workspace_root=workspace_root,
                     params=params,
                     sandbox=self.sandbox,
                     step_id=step_id,
@@ -462,4 +581,11 @@ class AgentLoop:
         
         # Check if command is or contains the test command
         # (agent might add cd prefix or other setup)
-        return test_normalized in cmd_normalized or cmd_normalized == test_normalized
+        if test_normalized in cmd_normalized or cmd_normalized == test_normalized:
+            return True
+
+        # Treat pytest invocations as test commands to ensure setup + canonical run.
+        pytest_pattern = re.compile(
+            r"(^|\s)(pytest|python\s+-m\s+pytest|python3\s+-m\s+pytest)(\s|$)"
+        )
+        return pytest_pattern.search(cmd_normalized) is not None

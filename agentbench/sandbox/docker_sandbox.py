@@ -21,6 +21,7 @@ class DockerSandbox:
         timeout_sec,
         stdout_path,
         stderr_path,
+        env=None,
     ):
         # shell -c <command>
         # network - --network <network>
@@ -44,8 +45,15 @@ class DockerSandbox:
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
 
+        env_vars = dict(env_defaults)
+        if env:
+            for key, value in env.items():
+                if value is None:
+                    continue
+                env_vars[key] = str(value)
+
         env_args = []
-        for key, value in env_defaults.items():
+        for key, value in env_vars.items():
             env_args.extend(["-e", f"{key}={value}"])
 
         hardening_args = [

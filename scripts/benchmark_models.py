@@ -19,6 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentbench.tasks.loader import load_task
+from agentbench.tasks.validator import validate_baseline
+from agentbench.util.paths import ensure_dir
 # Default models to benchmark (edit this list as needed)
 DEFAULT_MODELS = [
     # Free tier (likely won't work well)
@@ -145,7 +148,15 @@ def _classify_probe_skip(probe_results: dict[str, Any]) -> str | None:
 
     return None
 
-def run_agent(task_path: str, model: str, out_dir: Path, timeout_sec: int) -> dict:
+def run_agent(
+    task_path: str,
+    model: str,
+    out_dir: Path,
+    timeout_sec: int,
+    log_llm_messages: bool | None = None,
+    skip_baseline: bool = False,
+    strict_patch: bool = False,
+) -> dict:
     """Run agent with a specific model and return results."""
     
     env = os.environ.copy()
@@ -159,6 +170,14 @@ def run_agent(task_path: str, model: str, out_dir: Path, timeout_sec: int) -> di
         "--variant", "llm_v0",
         "--out", str(out_dir),
     ]
+    if log_llm_messages is True:
+        cmd.append("--log-llm-messages")
+    elif log_llm_messages is False:
+        cmd.append("--no-log-llm-messages")
+    if skip_baseline:
+        cmd.append("--skip-baseline")
+    if strict_patch:
+        cmd.append("--strict-patch")
     
     start_time = datetime.now()
     
@@ -257,6 +276,38 @@ def main():
         default="none",
         help="Optional probe calls before each run.",
     )
+    parser.add_argument(
+        "--strict-patch",
+        action="store_true",
+        help="Require strict unified diff patches (no auto-normalization).",
+    )
+    parser.add_argument(
+        "--baseline-once",
+        action="store_true",
+        help="Run baseline validation once, then skip per-model baseline.",
+    )
+    parser.add_argument(
+        "--skip-baseline",
+        action="store_true",
+        help="Skip baseline validation for each model run.",
+    )
+    log_group = parser.add_mutually_exclusive_group()
+    log_group.add_argument(
+        "--log-llm-messages",
+        action="store_true",
+        help=(
+            "Write LLM request/response pairs to llm_messages.jsonl "
+            "(overrides AGENTBENCH_LOG_LLM_MESSAGES)."
+        ),
+    )
+    log_group.add_argument(
+        "--no-log-llm-messages",
+        action="store_true",
+        help=(
+            "Disable LLM request/response logging for this run "
+            "(overrides AGENTBENCH_LOG_LLM_MESSAGES)."
+        ),
+    )
     args = parser.parse_args()
     
     # Load models
@@ -288,6 +339,25 @@ def main():
     
     out_dir = Path(args.out)
     results = []
+
+    if args.baseline_once:
+        task = load_task(Path(args.task))
+        baseline_root = ensure_dir(out_dir / "baseline")
+        workspace_dir = baseline_root / "workspace"
+        logs_dir = baseline_root / "logs"
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        print("\nRunning baseline validation once...")
+        baseline_result = validate_baseline(
+            task=task,
+            workspace_dir=workspace_dir,
+            logs_dir=logs_dir,
+        )
+        if baseline_result.exit_code == 0:
+            print("Baseline validation passed unexpectedly - task is invalid")
+            sys.exit(1)
     
     for i, model in enumerate(models, 1):
         print(f"\n[{i}/{len(models)}] Testing: {model}")
@@ -319,6 +389,13 @@ def main():
         # Each model gets its own output directory
         model_out = out_dir / model.replace("/", "_").replace(":", "_")
 
+        log_llm_messages = None
+        if args.log_llm_messages:
+            log_llm_messages = True
+        elif args.no_log_llm_messages:
+            log_llm_messages = False
+
+        skip_baseline = args.skip_baseline or args.baseline_once
         if skip_reason:
             result = {
                 "model": model,
@@ -331,7 +408,15 @@ def main():
                 "skip_reason": skip_reason,
             }
         else:
-            result = run_agent(args.task, model, model_out, args.timeout_sec)
+            result = run_agent(
+                args.task,
+                model,
+                model_out,
+                args.timeout_sec,
+                log_llm_messages=log_llm_messages,
+                skip_baseline=skip_baseline,
+                strict_patch=args.strict_patch,
+            )
         if probe_results:
             result["probe"] = probe_results
         results.append(result)

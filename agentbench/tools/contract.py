@@ -40,6 +40,7 @@ class RunParams(BaseModel):
     command: str
     timeout_sec: int | None = None
     env: dict[str, str] | None = None
+    network: str | None = None
 
 class ToolStatus(StrEnum):
     SUCCESS = "success"
@@ -69,7 +70,6 @@ class SearchMatch(BaseModel):
     content: str
     context_before: list[str] | None = None
     context_after: list[str] | None = None
-
 
 
 

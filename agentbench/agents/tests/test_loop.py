@@ -122,6 +122,62 @@ def make_sandbox(exit_code: int, stdout: str = "", stderr: str = ""):
     return SimpleNamespace(run=_run)
 
 
+def test_initial_tests_run_setup_separately(tmp_path: Path):
+    task = make_task(tmp_path)
+    workspace = tmp_path / "workspace"
+    (workspace / "repo").mkdir(parents=True)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    calls: list[dict] = []
+
+    def run(workspace_host_path, command, network, timeout_sec, stdout_path, stderr_path):
+        calls.append(
+            {
+                "command": command,
+                "network": network,
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+            }
+        )
+        if "pytest" in command:
+            stdout_path.write_text("F\n", encoding="utf-8", newline="\n")
+            stderr_path.write_text("", encoding="utf-8", newline="\n")
+            exit_code = 1
+        else:
+            stdout_path.write_text("setup ok\n", encoding="utf-8", newline="\n")
+            stderr_path.write_text("", encoding="utf-8", newline="\n")
+            exit_code = 0
+        return SimpleNamespace(
+            exit_code=exit_code,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            docker_cmd=[],
+        )
+
+    sandbox = SimpleNamespace(run=run)
+    agent = SequenceAgent([])
+    loop = AgentLoop(
+        agent=agent,
+        task=task,
+        workspace_root=workspace,
+        artifacts_dir=artifacts,
+        sandbox=sandbox,
+        event_logger=DummyEventLogger(),
+    )
+
+    exit_code, output = loop._run_initial_tests()
+
+    assert exit_code == 1
+    assert output.strip() == "F"
+    assert len(calls) == 2
+    assert calls[0]["network"] == "bridge"
+    assert "cd repo" in calls[0]["command"]
+    assert calls[1]["network"] == "none"
+    assert calls[1]["command"] == "cd repo && pytest -q"
+    assert loop._setup_completed is True
+
+
 def test_initial_tests_pass_short_circuits(tmp_path: Path):
     task = make_task(tmp_path)
     workspace = tmp_path / "workspace"
@@ -310,6 +366,55 @@ def test_run_tool_error_expected_failure_continues(tmp_path: Path, monkeypatch: 
     assert result.stop_reason == StopReason.AGENT_GAVE_UP
     assert result.steps_taken == 1
     assert result.final_test_exit_code == 1
+
+
+def test_run_tool_skips_setup_after_initial_tests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    task = make_task(tmp_path)
+    workspace = tmp_path / "workspace"
+    (workspace / "repo").mkdir(parents=True)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    run_request = make_tool_request(ToolName.RUN, {"command": "pytest -q"})
+    actions = [
+        AgentAction(decision=AgentDecision.CALL_TOOL, tool_request=run_request),
+        AgentAction(decision=AgentDecision.STOP, stop_reason=StopReason.AGENT_GAVE_UP),
+    ]
+    agent = SequenceAgent(actions)
+    sandbox = make_sandbox(exit_code=1, stderr="fail")
+
+    captured = {}
+
+    def stub_run_tool(workspace_root, params, sandbox, step_id, artifacts_dir):
+        captured["workspace_root"] = workspace_root
+        captured["command"] = params.command
+        captured["network"] = params.network
+        return make_tool_result(
+            request_id=f"tool_step_{step_id:04d}",
+            tool=ToolName.RUN,
+            status=ToolStatus.ERROR,
+            error=ToolError(error_type="abnormal_exit", message="fail", details={}),
+            exit_code=1,
+            stdout_path=None,
+            stderr_path=None,
+        )
+
+    monkeypatch.setattr("agentbench.agents.loop.run_tool", stub_run_tool)
+
+    loop = AgentLoop(
+        agent=agent,
+        task=task,
+        workspace_root=workspace,
+        artifacts_dir=artifacts,
+        sandbox=sandbox,
+        event_logger=DummyEventLogger(),
+    )
+
+    loop.run()
+
+    assert captured["workspace_root"] == workspace
+    assert captured["command"] == "cd repo && pytest -q"
+    assert captured["network"] is None
 
 
 def test_repeated_failure_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

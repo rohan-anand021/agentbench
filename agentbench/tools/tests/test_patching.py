@@ -72,6 +72,43 @@ NOEOF_PATCH = """\
 +    return 2
 """
 
+SPLIT_HEADER_NOEOF_PATCH = """\
+---
+a/src/main.py
++++ b/src/main.py
+@@ -1,2 +1,2 @@
+ def foo():
+-    return 1
++    return 2
+"""
+
+WORKSPACE_PATH_PATCH = """\
+--- a/workspace/repo/src/main.py
++++ b/workspace/repo/src/main.py
+@@ -1,2 +1,2 @@
+ def foo():
+-    return 1
++    return 2
+"""
+
+SRC_ROOT_PATCH = """\
+--- a/main.py
++++ b/main.py
+@@ -1,2 +1,2 @@
+ def foo():
+-    return 1
++    return 2
+"""
+
+MALFORMED_PREFIX_PATCH = """\
+--- a/src/main.py
++++ b/src/main.py
+@@ -1,2 +1,2 @@
+def foo():
+-    return 1
++    return 2
+"""
+
 BAD_HUNK_COUNT_PATCH = """\
 --- a/src/main.py
 +++ b/src/main.py
@@ -257,6 +294,79 @@ class TestApplyPatch:
             assert result.status == ToolStatus.SUCCESS
             content = file_path.read_text()
             assert "return 2" in content
+
+    def test_apply_patch_handles_split_header_missing_newline(self):
+        """Patch applies when headers are split and file lacks trailing newline."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_bytes(b"def foo():\n    return 1")
+
+            params = ApplyPatchParams(unified_diff=SPLIT_HEADER_NOEOF_PATCH)
+            result = apply_patch(workspace, params, step_id=3, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            content = file_path.read_text()
+            assert "return 2" in content
+
+    def test_apply_patch_strips_workspace_prefix(self):
+        """Patch applies when paths include /workspace/repo prefix."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_text("def foo():\n    return 1\n")
+
+            params = ApplyPatchParams(unified_diff=WORKSPACE_PATH_PATCH)
+            result = apply_patch(workspace, params, step_id=3, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            assert "return 2" in file_path.read_text()
+
+    def test_apply_patch_prefixes_src_root(self):
+        """Patch applies when paths are missing src/ prefix."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_text("def foo():\n    return 1\n")
+
+            params = ApplyPatchParams(unified_diff=SRC_ROOT_PATCH)
+            result = apply_patch(workspace, params, step_id=6, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            assert "return 2" in file_path.read_text()
+
+    def test_apply_patch_adds_missing_hunk_prefix(self):
+        """Patch applies when hunk context lines are missing prefixes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            artifacts = workspace / "diffs"
+            artifacts.mkdir()
+            src_dir = workspace / "src"
+            src_dir.mkdir()
+
+            file_path = src_dir / "main.py"
+            file_path.write_text("def foo():\n    return 1\n")
+
+            params = ApplyPatchParams(unified_diff=MALFORMED_PREFIX_PATCH)
+            result = apply_patch(workspace, params, step_id=4, artifacts_dir=artifacts)
+
+            assert result.status == ToolStatus.SUCCESS
+            assert "return 2" in file_path.read_text()
 
     def test_apply_patch_repairs_hunk_counts(self):
         """Patch applies when hunk header counts are wrong."""

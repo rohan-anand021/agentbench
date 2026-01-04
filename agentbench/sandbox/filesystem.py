@@ -35,8 +35,13 @@ def resolve_safe_path(
 
     workspace_root = Path(workspace_root).resolve()
     workspace_prefix = "/workspace"
+    repo_prefix = "/workspace/repo"
 
-    if relative_path == workspace_prefix:
+    if relative_path == repo_prefix:
+        relative_path = ""
+    elif relative_path.startswith(f"{repo_prefix}/"):
+        relative_path = relative_path[len(repo_prefix) + 1:]
+    elif relative_path == workspace_prefix:
         relative_path = ""
     elif relative_path.startswith(f"{workspace_prefix}/"):
         relative_path = relative_path[len(workspace_prefix) + 1:]
@@ -79,11 +84,18 @@ def safe_glob(
     workspace_root = Path(workspace_root).resolve()
 
     files = list(workspace_root.glob(pattern))
-    files = [f for f in files if not f.is_symlink() and '.git' not in f.parts]
+    ignored_parts = {".git", ".pytest_cache", "__pycache__", "build"}
+    filtered = []
+    for f in files:
+        if f.is_symlink():
+            continue
+        parts = f.parts
+        if any(part in ignored_parts or part.startswith(".") for part in parts):
+            continue
+        filtered.append(f)
+    files = filtered
 
     logger.debug("safe_glob matched %d files for pattern %s", len(files), pattern)
     return sorted(files)
-
-
 
 

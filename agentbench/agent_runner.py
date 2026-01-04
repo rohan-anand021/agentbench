@@ -1,4 +1,5 @@
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from agentbench.scoring import FailureReason
 from agentbench.tasks.models import TaskSpec
 from agentbench.tasks.validator import validate_baseline
 from agentbench.util.events import EventLogger
+from agentbench.util.git import checkout_commit, clone_repo
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,8 @@ def run_agent_attempt(
     llm_config: LLMConfig | None = None,
     llm_client: LLMClient | None = None,
     variant_override: str | None = None,
+    log_llm_messages: bool | None = None,
+    skip_baseline: bool = False,
     ) -> AttemptRecord:
     """
     Run an agent attempt on a task.
@@ -55,6 +59,28 @@ def run_agent_attempt(
     failure_reason = None
     exit_code = -1
     entrypoint = variant_override or task.agent.entrypoint
+
+    def _resolve_repo_url(repo_url: str, task_source_path: Path) -> str:
+        if repo_url.startswith("file://"):
+            return repo_url
+
+        path_candidate = Path(repo_url)
+        if path_candidate.is_absolute():
+            return str(path_candidate)
+
+        if repo_url.startswith("."):
+            return str((task_source_path.parent / repo_url).resolve())
+
+        base = task_source_path.parent.resolve()
+        while True:
+            candidate = base / repo_url
+            if candidate.exists():
+                return str(candidate.resolve())
+            if base == base.parent:
+                break
+            base = base.parent
+
+        return repo_url
 
     def get_agent(
         entrypoint: str,
@@ -81,24 +107,55 @@ def run_agent_attempt(
             workdir = task.environment.workdir
         )
 
-        logger.debug("Running baseline validation")
-        validation_result = validate_baseline(
-            task = task,
-            workspace_dir = workspace_dir,
+        if skip_baseline:
+            logger.info("Skipping baseline validation for task %s", task.id)
             logs_dir = artifacts_dir / "logs"
-        )
-
-        if validation_result.exit_code == 0:
-            logger.error("Baseline validation passed unexpectedly for task %s", task.id)
-            raise ValueError(
-                "baseline validation passed unexpectedly - task is invalid"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            repo_dir = workspace_dir / "repo"
+            if repo_dir.exists():
+                shutil.rmtree(repo_dir, ignore_errors=True)
+            repo_url = _resolve_repo_url(task.repo.url, task.source_path)
+            stdout_path, stderr_path, exit_code = clone_repo(
+                url=repo_url,
+                dest=repo_dir,
+                logs_dir=logs_dir,
             )
+            if exit_code != 0:
+                failure_reason = FailureReason.GIT_CLONE_FAILED
+                raise RuntimeError(
+                    f"git clone failed with exit code: {exit_code}"
+                )
+            stdout_path, stderr_path, exit_code = checkout_commit(
+                repo_dir=repo_dir,
+                commit=task.repo.commit,
+                logs_dir=logs_dir,
+            )
+            if exit_code != 0:
+                failure_reason = FailureReason.GIT_CHECKOUT_FAILED
+                raise RuntimeError(
+                    f"git checkout failed with exit code: {exit_code}"
+                )
+        else:
+            logger.debug("Running baseline validation")
+            validation_result = validate_baseline(
+                task = task,
+                workspace_dir = workspace_dir,
+                logs_dir = artifacts_dir / "logs"
+            )
+
+            if validation_result.exit_code == 0:
+                logger.error("Baseline validation passed unexpectedly for task %s", task.id)
+                raise ValueError(
+                    "baseline validation passed unexpectedly - task is invalid"
+                )
 
         event_logger = None
         if entrypoint != "scripted":
             event_logger = EventLogger(
                 run_id=run_id,
-                events_file=artifacts_dir / "events.jsonl"
+                events_file=artifacts_dir / "events.jsonl",
+                llm_messages_file=artifacts_dir / "llm_messages.jsonl",
+                log_llm_messages=log_llm_messages,
             )
 
         logger.debug("Instantiating agent with entrypoint %s", entrypoint)
@@ -109,25 +166,30 @@ def run_agent_attempt(
         )
 
         if isinstance(agent, ScriptedAgent):
+            failing_output = ""
+            if validation_result and validation_result.stderr_path:
+                failing_output = validation_result.stderr_path.read_text()
             result = agent.run(
                 task = task,
                 sandbox = sandbox,
                 workspace_root = workspace_dir,
                 artifacts_dir = artifacts_dir,
-                failing_output = validation_result.stderr_path.read_text() if validation_result.stderr_path else ""
+                failing_output = failing_output,
             )
         else:
             # Use AgentLoop for other agents (like llm_v0)
             if event_logger is None:
                 event_logger = EventLogger(
                     run_id=run_id,
-                    events_file=artifacts_dir / "events.jsonl"
+                    events_file=artifacts_dir / "events.jsonl",
+                    llm_messages_file=artifacts_dir / "llm_messages.jsonl",
+                    log_llm_messages=log_llm_messages,
                 )
             budget = None
             if task.agent is not None:
                 budget = AgentBudget(
                     max_steps=task.agent.max_steps,
-                    max_time_sec=max(task.environment.timeout_sec, 60),
+                    max_time_sec=max(task.environment.timeout_sec, 180),
                 )
             loop = AgentLoop(
                 agent=agent,

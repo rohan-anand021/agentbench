@@ -58,6 +58,25 @@ class OutputFunctionCall(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | dict[str, Any] | None = None
+    function: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        updated = dict(data)
+        func = updated.get("function")
+        if isinstance(func, dict):
+            updated.setdefault("name", func.get("name"))
+            updated.setdefault("arguments", func.get("arguments"))
+        if "tool_name" in updated and "name" not in updated:
+            updated["name"] = updated.get("tool_name")
+        if "args" in updated and "arguments" not in updated:
+            updated["arguments"] = updated.get("args")
+        if updated.get("id") and not updated.get("call_id"):
+            updated["call_id"] = updated["id"]
+        return updated
 
 class OutputToolCall(BaseModel):
     type: Literal["tool_call"] = "tool_call"
@@ -65,6 +84,25 @@ class OutputToolCall(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | dict[str, Any] | None = None
+    function: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        updated = dict(data)
+        func = updated.get("function")
+        if isinstance(func, dict):
+            updated.setdefault("name", func.get("name"))
+            updated.setdefault("arguments", func.get("arguments"))
+        if "tool_name" in updated and "name" not in updated:
+            updated["name"] = updated.get("tool_name")
+        if "args" in updated and "arguments" not in updated:
+            updated["arguments"] = updated.get("args")
+        if updated.get("id") and not updated.get("call_id"):
+            updated["call_id"] = updated["id"]
+        return updated
 
 class OutputReasoning(BaseModel):
     """Reasoning/chain-of-thought output from models like o3, grok, deepseek."""

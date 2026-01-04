@@ -91,7 +91,16 @@ class LLMAgentV0(Agent):
                     if "output" in result.data:
                         lines.append(f"Result: {result.data['output'][:2000]}")
                     elif "files" in result.data:
-                        lines.append(f"Files: {result.data['files']}")
+                        files = result.data["files"]
+                        lines.append(f"Files: {files}")
+                        if (
+                            isinstance(files, list)
+                            and "src" in files
+                            and "tests" in files
+                        ):
+                            lines.append(
+                                "Hint: repo uses src/ and tests/. Read the failing test, then the src module."
+                            )
                     elif "matches" in result.data:
                         matches = result.data["matches"]
                         if isinstance(matches, list):
@@ -223,6 +232,10 @@ class LLMAgentV0(Agent):
                 name = tool_call.name
                 args_text = tool_call.arguments
                 call_id = tool_call.call_id or tool_call.id
+                function = getattr(tool_call, "function", None)
+                if not name and isinstance(function, dict):
+                    name = function.get("name")
+                    args_text = args_text or function.get("arguments")
 
             if isinstance(args_text, dict):
                 params = args_text
@@ -275,6 +288,33 @@ class LLMAgentV0(Agent):
                     request_id=request_id,
                 ),
             )
+        # Fallback: if the model didn't call a tool, pick a file from the last list_files.
+        read_paths = {
+            req.params.get("path")
+            for req, _ in state.tool_history
+            if req.tool == ToolName.READ_FILE and isinstance(req.params, dict)
+        }
+        for req, result in reversed(state.tool_history):
+            if req.tool != ToolName.LIST_FILES:
+                continue
+            if not result.data or not result.data.get("files"):
+                continue
+            files = result.data.get("files")
+            if not isinstance(files, list):
+                continue
+            candidates = [f for f in files if isinstance(f, str) and f not in read_paths]
+            if not candidates:
+                candidates = [f for f in files if isinstance(f, str)]
+            if candidates:
+                request_id = self._next_request_id(state)
+                return AgentAction(
+                    decision=AgentDecision.CALL_TOOL,
+                    tool_request=ToolRequest(
+                        tool=ToolName.READ_FILE,
+                        params={"path": candidates[0]},
+                        request_id=request_id,
+                    ),
+                )
         reason = text or "No tool call returned."
         return AgentAction(
             decision=AgentDecision.STOP,
