@@ -29,6 +29,29 @@ from agentbench.util.git import checkout_commit, clone_repo
 logger = logging.getLogger(__name__)
 
 
+def map_stop_reason_to_failure(
+    stop_reason: StopReason | None,
+) -> FailureReason | None:
+    """Map agent stop reason to attempt failure taxonomy."""
+    if stop_reason is None:
+        return None
+    match stop_reason:
+        case StopReason.SUCCESS:
+            return None
+        case StopReason.LLM_ERROR:
+            return FailureReason.LLM_ERROR
+        case StopReason.TOOL_ERROR:
+            return FailureReason.TOOL_ERROR
+        case StopReason.MAX_TIME:
+            return FailureReason.TIMEOUT
+        case StopReason.MAX_STEPS | StopReason.AGENT_GAVE_UP | StopReason.REPEATED_FAILURE:
+            return FailureReason.AGENT_GAVE_UP
+        case StopReason.INTERRUPTED:
+            return FailureReason.INTERRUPTED
+        case _:
+            return None
+
+
 def run_agent_attempt(
     task: TaskSpec,
     workspace_dir: Path,
@@ -82,27 +105,6 @@ def run_agent_attempt(
             base = base.parent
 
         return repo_url
-
-    def _failure_from_stop_reason(
-        stop_reason: StopReason | None,
-    ) -> FailureReason | None:
-        if stop_reason is None:
-            return None
-        match stop_reason:
-            case StopReason.SUCCESS:
-                return None
-            case StopReason.LLM_ERROR:
-                return FailureReason.LLM_ERROR
-            case StopReason.TOOL_ERROR:
-                return FailureReason.TOOL_ERROR
-            case StopReason.MAX_TIME:
-                return FailureReason.TIMEOUT
-            case StopReason.MAX_STEPS | StopReason.AGENT_GAVE_UP | StopReason.REPEATED_FAILURE:
-                return FailureReason.AGENT_GAVE_UP
-            case StopReason.INTERRUPTED:
-                return FailureReason.INTERRUPTED
-            case _:
-                return None
 
     def get_agent(
         entrypoint: str,
@@ -233,7 +235,7 @@ def run_agent_attempt(
         failure_reason = FailureReason.UNKNOWN
 
     stop_reason = result.stop_reason if result else None
-    failure_from_stop = _failure_from_stop_reason(stop_reason)
+    failure_from_stop = map_stop_reason_to_failure(stop_reason)
     if failure_reason is None:
         failure_reason = failure_from_stop
     if (

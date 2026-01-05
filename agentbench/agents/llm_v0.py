@@ -28,6 +28,10 @@ from agentbench.tools.contract import ToolName, ToolRequest
 from agentbench.util.events import EventLogger, NullEventLogger, NULL_EVENT_LOGGER
 
 
+class ToolCallFormatError(Exception):
+    """Raised when an LLM tool call has malformed arguments."""
+
+
 class LLMAgentV0(Agent):
     def __init__(
         self,
@@ -53,21 +57,55 @@ class LLMAgentV0(Agent):
                 decision=AgentDecision.CALL_TOOL,
                 tool_request=request,
             )
+
         logger.debug("LLM decide called for step %d", state.step_number)
         observation = self.format_observation(state)
         logger.debug("Observation: %s", observation[:500])
-        input_items = self._build_messages(observation)
+        base_input_items = self._build_messages(observation)
         tools = self._get_tool_definitions()
-        response = self._run_completion(input_items, tools)
-        logger.debug("LLM response: has_tool_calls=%s, error=%s, text=%s", 
-                     response.has_tool_calls, response.error, 
-                     (response.text_content or "")[:200])
-        action = self._parse_llm_response(response, state)
-        logger.info("LLM action: decision=%s, tool=%s, stop_reason=%s",
-                    action.decision, 
+
+        max_attempts = 2
+        last_error: Exception | None = None
+        input_items = base_input_items
+
+        for attempt in range(1, max_attempts + 1):
+            response = self._run_completion(input_items, tools)
+            logger.debug(
+                "LLM response (attempt %d/%d): has_tool_calls=%s, error=%s, text=%s",
+                attempt,
+                max_attempts,
+                response.has_tool_calls,
+                response.error,
+                (response.text_content or "")[:200],
+            )
+            try:
+                action = self._parse_llm_response(response, state)
+                logger.info(
+                    "LLM action: decision=%s, tool=%s, stop_reason=%s",
+                    action.decision,
                     action.tool_request.tool if action.tool_request else None,
-                    action.stop_reason)
-        return action
+                    action.stop_reason,
+                )
+                return action
+            except ToolCallFormatError as e:
+                last_error = e
+                if attempt >= max_attempts:
+                    break
+                logger.warning("Malformed tool call, retrying once: %s", e)
+                retry_hint = (
+                    "The previous tool call had invalid JSON arguments. "
+                    "Return the tool call again with valid JSON arguments."
+                )
+                input_items = base_input_items + [
+                    InputMessage(role=MessageRole.USER, content=retry_hint)
+                ]
+
+        # If we reach here, retries failed
+        return AgentAction(
+            decision=AgentDecision.STOP,
+            stop_reason=StopReason.LLM_ERROR,
+            reasoning=str(last_error) if last_error else "Invalid tool call format.",
+        )
 
     def format_observation(self, state: AgentState) -> str:
         lines = [
@@ -263,12 +301,8 @@ class LLMAgentV0(Agent):
                 elif isinstance(args_text, str):
                     try:
                         params = json.loads(args_text) if args_text else {}
-                    except json.JSONDecodeError:
-                        return AgentAction(
-                            decision=AgentDecision.STOP,
-                            stop_reason=StopReason.LLM_ERROR,
-                            reasoning="Invalid tool arguments JSON.",
-                        )
+                    except json.JSONDecodeError as e:
+                        raise ToolCallFormatError(f"Invalid tool arguments JSON: {e}") from e
                 elif args_text is None:
                     params = {}
                 else:

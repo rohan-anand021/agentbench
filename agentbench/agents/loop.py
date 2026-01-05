@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import signal
 from pathlib import Path
 
 import ulid
@@ -40,6 +42,21 @@ from agentbench.util.paths import ensure_dir
 from agentbench.util.truncation import truncate_output
 
 
+@contextmanager
+def interruptible():
+    """Catch SIGINT (Ctrl+C) and convert to InterruptedError, restoring handler after."""
+    original = signal.getsignal(signal.SIGINT)
+
+    def _handler(signum, frame):  # pragma: no cover - signal handler
+        raise InterruptedError("Run interrupted by user (SIGINT)")
+
+    signal.signal(signal.SIGINT, _handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
 class AgentLoop:
     """Executes an agent's decision loop with budget enforcement."""
 
@@ -67,11 +84,30 @@ class AgentLoop:
         self.budget = budget or AgentBudget()
         self._tool_step_counter = 0
         self._setup_completed = False
+        self._tests_ran_since_last_patch = False
+        self._last_state: AgentState | None = None
 
     def run(self) -> AgentResult:
         started_at = datetime.now(timezone.utc)
+        try:
+            with interruptible():
+                return self._run_main(started_at)
+        except InterruptedError:
+            state = self._last_state
+            duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+            return AgentResult(
+                success=False,
+                stop_reason=StopReason.INTERRUPTED,
+                steps_taken=state.step_number if state else 0,
+                patches_applied=state.patches_applied if state else [],
+                duration_sec=duration,
+                final_test_exit_code=state.last_test_exit_code if state else -1,
+                final_test_passed=False,
+            )
 
+    def _run_main(self, started_at: datetime) -> AgentResult:
         exit_code, output = self._run_initial_tests()
+        self._tests_ran_since_last_patch = True
         if exit_code == 0:
             duration = (datetime.now(timezone.utc) - started_at).total_seconds()
             return AgentResult(
@@ -97,12 +133,21 @@ class AgentLoop:
             budget_remaining_sec=self.budget.max_time_sec,
             test_command=self.task.run.command,
         )
+        self._last_state = state
 
         while True:
             logger.debug("Loop iteration: step=%d, budget_steps=%d", 
                          state.step_number, state.budget_remaining_steps)
             stop_reason = self._check_stop_conditions(state)
             if stop_reason:
+                state, final_auto = self._ensure_final_tests(state)
+                if (
+                    final_auto
+                    and final_auto.data
+                    and final_auto.data.get("is_test_command", False)
+                    and final_auto.exit_code == 0
+                ):
+                    stop_reason = StopReason.SUCCESS
                 logger.info("Loop exiting: stop_reason=%s", stop_reason)
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
@@ -139,6 +184,14 @@ class AgentLoop:
 
             if action.decision == AgentDecision.STOP:
                 reason = action.stop_reason or StopReason.AGENT_GAVE_UP
+                state, final_auto = self._ensure_final_tests(state)
+                if (
+                    final_auto
+                    and final_auto.data
+                    and final_auto.data.get("is_test_command", False)
+                    and final_auto.exit_code == 0
+                ):
+                    reason = StopReason.SUCCESS
                 logger.info("Agent decided to STOP: reason=%s", reason)
                 duration = (
                     datetime.now(timezone.utc) - state.started_at
@@ -174,13 +227,16 @@ class AgentLoop:
             result = self._execute_tool(action.tool_request)
             logger.debug("Tool result: status=%s", result.status)
             state = self._update_state(state, action, result)
+            self._last_state = state
             if result.status == ToolStatus.ERROR:
                 is_expected_test_failure = (
                     action.tool_request.tool == ToolName.RUN
                     and result.error is not None
                     and result.error.error_type == "abnormal_exit"
                 )
-                if not is_expected_test_failure:
+                # For non-RUN tool errors, allow agent to continue (records error in history)
+                is_non_run = action.tool_request.tool != ToolName.RUN
+                if not (is_expected_test_failure or is_non_run):
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
                     ).total_seconds()
@@ -198,6 +254,7 @@ class AgentLoop:
                 action.tool_request.tool == ToolName.APPLY_PATCH
                 and result.status == ToolStatus.SUCCESS
             ):
+                self._tests_ran_since_last_patch = False
                 auto_request = ToolRequest(
                     tool=ToolName.RUN,
                     params={"command": self.task.run.command},
@@ -214,6 +271,8 @@ class AgentLoop:
                     if auto_result.data
                     else False
                 )
+                if is_test:
+                    self._tests_ran_since_last_patch = True
                 if is_test and auto_result.exit_code == 0:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
@@ -231,6 +290,8 @@ class AgentLoop:
             # Only count success when the actual TEST command passes, not arbitrary shell commands
             if action.tool_request.tool == ToolName.RUN:
                 is_test = result.data.get("is_test_command", False) if result.data else False
+                if is_test:
+                    self._tests_ran_since_last_patch = True
                 if is_test and result.exit_code == 0:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
@@ -328,6 +389,7 @@ class AgentLoop:
                 result = apply_patch(self.repo_root, params, step_id, diffs_dir)
                 result.request_id = request.request_id
                 if result.status == ToolStatus.SUCCESS:
+                    self._tests_ran_since_last_patch = False
                     self._setup_completed = False
                     patch_path = diffs_dir / f"step_{step_id:04d}.patch"
                     if result.data is None:
@@ -437,6 +499,7 @@ class AgentLoop:
                 # Fix: use ternary to handle exit_code=0 correctly (0 or -1 evaluates to -1!)
                 exit_code = result.exit_code if result.exit_code is not None else -1
                 if is_test_command:
+                    self._tests_ran_since_last_patch = True
                     self.event_logger.log_tests_finished(
                         exit_code=exit_code,
                         passed=(result.exit_code == 0),
@@ -593,3 +656,36 @@ class AgentLoop:
             r"(^|\s)(pytest|python\s+-m\s+pytest|python3\s+-m\s+pytest)(\s|$)"
         )
         return pytest_pattern.search(cmd_normalized) is not None
+
+    def _auto_run_test_command(
+        self,
+        state: AgentState,
+        request_id_suffix: str,
+    ) -> tuple[AgentState, ToolResult]:
+        """Run the task's test command automatically (used on exit when needed)."""
+        auto_request = ToolRequest(
+            tool=ToolName.RUN,
+            params={"command": self.task.run.command},
+            request_id=f"auto_final_{request_id_suffix}",
+        )
+        auto_action = AgentAction(
+            decision=AgentDecision.CALL_TOOL,
+            tool_request=auto_request,
+        )
+        auto_result = self._execute_tool(auto_request)
+        state = self._update_state(state, auto_action, auto_result)
+        return state, auto_result
+
+    def _ensure_final_tests(
+        self,
+        state: AgentState,
+    ) -> tuple[AgentState, ToolResult | None]:
+        """If tests haven't run since the last patch, run them once before exiting."""
+        if self._tests_ran_since_last_patch:
+            return state, None
+        state, auto_result = self._auto_run_test_command(
+            state,
+            request_id_suffix=f"{state.step_number:04d}",
+        )
+        self._tests_ran_since_last_patch = True
+        return state, auto_result

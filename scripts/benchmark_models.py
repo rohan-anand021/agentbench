@@ -96,6 +96,32 @@ def _read_last_agent_summary(out_dir: Path) -> dict[str, Any] | None:
     return last_summary
 
 
+def _read_last_tool_error(out_dir: Path) -> dict[str, Any] | None:
+    events_path = _find_events_path(out_dir)
+    if not events_path or not events_path.is_file():
+        return None
+
+    last_error = None
+    try:
+        with events_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_type") == "tool_call_finished":
+                    payload = event.get("payload") or {}
+                    if payload.get("status") == "error":
+                        last_error = payload
+    except OSError:
+        return None
+
+    return last_error
+
+
 def _probe_model(model: str, with_tools: bool) -> dict[str, Any]:
     import asyncio
     from pydantic import SecretStr
@@ -250,7 +276,43 @@ def run_agent(
         result_data["stop_reason"] = agent_summary.get("stop_reason")
         result_data["failure_reason"] = agent_summary.get("failure_reason")
 
+    tool_error = _read_last_tool_error(out_dir)
+    if tool_error:
+        err = tool_error.get("error") or {}
+        result_data["tool_error_type"] = err.get("error_type")
+        result_data["tool_error_message"] = err.get("message")
+        result_data["tool_name"] = tool_error.get("tool")
+
     return result_data
+
+
+def _classify_failure(result: dict) -> str:
+    """
+    Rough categorization to disambiguate infra vs model vs task failures.
+    """
+    if result.get("skipped"):
+        return "skipped"
+    if result.get("success"):
+        return "success"
+    exit_code = result.get("exit_code", 0)
+    failure_reason = (result.get("failure_reason") or "").upper()
+    stop_reason = (result.get("stop_reason") or "").upper()
+    if exit_code < 0:
+        return "infra_runner"
+    if result.get("llm_error_type"):
+        return "infra_llm"
+    if result.get("tool_error_type"):
+        return "infra_agent"
+    if failure_reason in {
+        "SANDBOX_ERROR",
+        "GIT_CLONE_FAILED",
+        "GIT_CHECKOUT_FAILED",
+        "SETUP_TIMEOUT",
+    }:
+        return "infra_task"
+    if stop_reason in {"LLM_ERROR", "TOOL_ERROR"}:
+        return "infra_agent"
+    return "model_or_task"
 
 
 def print_results_table(results: list[dict]):
@@ -267,11 +329,15 @@ def print_results_table(results: list[dict]):
             success_str = "– SKIP"
         else:
             success_str = "✓ PASS" if r["success"] else "✗ FAIL"
-        reason = ""
+        category = r.get("failure_category") or ""
+        summary = r.get("failure_summary")
+        reason = category
         if r.get("skipped"):
-            reason = r.get("skip_reason") or ""
+            reason = summary or r.get("skip_reason") or category
         elif not r.get("success"):
-            reason = r.get("failure_reason") or r.get("stop_reason") or ""
+            reason = summary or r.get("failure_reason") or r.get("stop_reason") or ""
+            if category and reason and category not in reason:
+                reason = f"{category}: {reason}"
         print(
             f"{r['model']:<45} {success_str:<10} "
             f"{r['duration_sec']:>8.1f}s    {r['exit_code']:<6} {reason}"
@@ -456,6 +522,22 @@ def main():
             )
         if probe_results:
             result["probe"] = probe_results
+        result["failure_category"] = _classify_failure(result)
+        if result.get("tool_error_type"):
+            summary = result.get("tool_error_type") or ""
+            msg = result.get("tool_error_message")
+            tool = result.get("tool_name")
+            if tool:
+                summary = f"{tool}: {summary}"
+            if msg:
+                summary = f"{summary} - {msg}"
+            result["failure_summary"] = summary
+        elif result.get("llm_error_type"):
+            summary = result.get("llm_error_type") or ""
+            msg = result.get("llm_error_message")
+            if msg:
+                summary = f"{summary} - {msg}"
+            result["failure_summary"] = summary
         results.append(result)
         
         if result.get("skipped"):

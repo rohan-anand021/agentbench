@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 from agentbench.agents.base import Agent
-from agentbench.agents.types import AgentResult, StopReason
+from agentbench.agents.types import AgentAction, AgentResult, AgentState, StopReason
 from agentbench.sandbox.docker_sandbox import DockerSandbox
 from agentbench.tasks.models import TaskSpec
 from agentbench.tools.builtins import list_files, read_file, search, run_tool
@@ -18,7 +18,9 @@ from agentbench.tools.contract import (
     ToolStatus,
 )
 from agentbench.tools.patching import apply_patch
+from agentbench.util.commands import normalize_setup_commands
 from agentbench.util.events import EventLogger
+from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
 
@@ -47,20 +49,71 @@ class ScriptedAgent(Agent):
         self.run_id = run_id
         logger.debug("ScriptedAgent initialized with run_id=%s", run_id)
 
+    @property
+    def variant_name(self) -> str:
+        return "scripted"
+
+    def decide(self, state: AgentState) -> AgentAction:  # pragma: no cover - not used by scripted path
+        raise NotImplementedError("ScriptedAgent uses run() directly instead of decide()")
+
+    def format_observation(self, state: AgentState) -> str:  # pragma: no cover - not used by scripted path
+        return "ScriptedAgent executes a fixed sequence; observations are not used."
+
     def run(
         self,
-        _task: TaskSpec,
+        task: TaskSpec,
         sandbox: DockerSandbox,
         workspace_root: Path,
         artifacts_dir: Path,
-        _failing_output: str,
+        failing_output: str,
     ) -> AgentResult:
         logger.info("Starting scripted agent run %s", self.run_id)
-        
+
+        repo_root = workspace_root / "repo" if (workspace_root / "repo").is_dir() else workspace_root
+
         event_logger = EventLogger(
             run_id = self.run_id,
             events_file = artifacts_dir / "events.jsonl"
         )
+
+        # Run setup commands so dependencies (pytest, package) are available in the mounted workspace
+        if task.setup and task.setup.commands:
+            setup_cmd = " && ".join(
+                normalize_setup_commands(
+                    task.setup.commands,
+                    run_command=task.run.command,
+                )
+            )
+            if repo_root != workspace_root:
+                setup_cmd = f"cd repo && {setup_cmd}"
+            logs_dir = ensure_dir(artifacts_dir / "logs")
+            setup_stdout = logs_dir / "setup_stdout.txt"
+            setup_stderr = logs_dir / "setup_stderr.txt"
+            event_logger.log_command_started(command=setup_cmd)
+            setup_timeout = max(task.environment.timeout_sec, 180)
+            setup_result = sandbox.run(
+                workspace_host_path=workspace_root,
+                command=setup_cmd,
+                network="bridge",
+                timeout_sec=setup_timeout,
+                stdout_path=setup_stdout,
+                stderr_path=setup_stderr,
+            )
+            event_logger.log_command_finished(
+                exit_code=setup_result.exit_code,
+                stdout_path=str(setup_stdout),
+                stderr_path=str(setup_stderr),
+            )
+            if setup_result.exit_code != 0:
+                return AgentResult(
+                    success=False,
+                    stop_reason=StopReason.TOOL_ERROR,
+                    steps_taken=0,
+                    patches_applied=[],
+                    duration_sec=0.0,
+                    final_test_exit_code=setup_result.exit_code,
+                    final_test_passed=False,
+                )
 
         event_logger.log_agent_turn_started()
         logger.debug("Step 1: listing files")
@@ -78,7 +131,8 @@ class ScriptedAgent(Agent):
 
         step_1_result = list_files(
             request_id = f"{self.run_id}-001",
-            workspace_root = workspace_root,
+            # operate within the repo root so relative paths resolve
+            workspace_root = repo_root,
             params = ListFilesParams(
                 **step_1_request.params
             )
@@ -95,7 +149,7 @@ class ScriptedAgent(Agent):
             tool = ToolName.READ_FILE,
             params = json.loads(
                 ReadFileParams(
-                    path = "src/calculator.py",
+                    path = "src/toy/mathy.py",
                     start_line = None,
                     end_line = None
                 ).model_dump_json()
@@ -107,7 +161,7 @@ class ScriptedAgent(Agent):
 
         step_2_result = read_file(
             request_id = f"{self.run_id}-002",
-            workspace_root = workspace_root,
+            workspace_root = repo_root,
             params = ReadFileParams(**step_2_request.params)
         )
 
@@ -135,7 +189,7 @@ class ScriptedAgent(Agent):
 
         step_3_result = search(
             request_id = f"{self.run_id}-003",
-            workspace_root = workspace_root,
+            workspace_root = repo_root,
             params = SearchParams(**step_3_request.params)
         )
 
@@ -148,17 +202,19 @@ class ScriptedAgent(Agent):
         logger.debug("Step 4: applying patch")
         event_logger.log_agent_turn_started()
 
+        diffs_dir = ensure_dir(artifacts_dir / "diffs")
+
         step_4_request = ToolRequest(
             tool = ToolName.APPLY_PATCH,
             params = json.loads(
                 ApplyPatchParams(
-                    unified_diff = """--- a/src/calculator.py
-                                  +++ b/src/calculator.py
-                                  @@ -1,4 +1,4 @@
-                                  def add(a, b):
-                                  -    return a - b  # BUG: should be +
-                                  +    return a + b
-                                """
+                    unified_diff = """--- a/src/toy/mathy.py
++++ b/src/toy/mathy.py
+@@ -1,2 +1,2 @@
+ def add(a, b):
+-    return a - b
++    return a + b
+"""
                 ).model_dump_json()
             ),
             request_id = f"{self.run_id}-004"
@@ -167,10 +223,10 @@ class ScriptedAgent(Agent):
         event_logger.log_tool_started(step_4_request)
 
         step_4_result = apply_patch(
-            workspace_root = workspace_root,
+            workspace_root = repo_root,
             params = ApplyPatchParams(**step_4_request.params),
             step_id = 4,
-            artifacts_dir = artifacts_dir / "diffs"
+            artifacts_dir = diffs_dir
         )
 
         if step_4_result.status == ToolStatus.ERROR:
@@ -187,8 +243,8 @@ class ScriptedAgent(Agent):
         else:
             event_logger.log_patch_applied(
                 step_id = 4,
-                changed_files = ["src/calculator.py"],
-                patch_artifact_path = str(artifacts_dir / "diffs")
+                changed_files = ["src/toy/mathy.py"],
+                patch_artifact_path = str(diffs_dir / f"step_{4:04d}.patch")
             )
 
         event_logger.log_tool_finished(step_4_result)
@@ -204,7 +260,9 @@ class ScriptedAgent(Agent):
             tool = ToolName.RUN,
             params = json.loads(
                 RunParams(
-                    command = "pytest -q",
+                    command = (
+                        "cd repo && PYTHONPATH=/workspace/repo/src:/workspace/site-packages python -m pytest -q"
+                    ),
                     timeout_sec = 60,
                     env = None
                 ).model_dump_json()
@@ -222,7 +280,7 @@ class ScriptedAgent(Agent):
             params = RunParams(**step_5_request.params),
             sandbox = sandbox,
             step_id = 5,
-            artifacts_dir = artifacts_dir / "diffs"
+            artifacts_dir = diffs_dir
         )
 
         if step_5_result.status == ToolStatus.ERROR:
@@ -231,7 +289,7 @@ class ScriptedAgent(Agent):
                 success = False,
                 stop_reason = StopReason.TOOL_ERROR,
                 steps_taken = 5,
-                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                patches_applied = [str(diffs_dir / f"step_{4:04d}.patch")],
                 duration_sec = 0.0,
                 final_test_exit_code = step_5_result.exit_code,
                 final_test_passed = False,
@@ -255,7 +313,7 @@ class ScriptedAgent(Agent):
                 success = True,
                 stop_reason = StopReason.SUCCESS,
                 steps_taken = 5,
-                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                patches_applied = [str(diffs_dir / f"step_{4:04d}.patch")],
                 duration_sec = 0.0,
                 final_test_exit_code = step_5_result.exit_code,
                 final_test_passed = True,
@@ -267,22 +325,11 @@ class ScriptedAgent(Agent):
                 success = False,
                 stop_reason = StopReason.AGENT_GAVE_UP,
                 steps_taken = 5,
-                patches_applied = [str(artifacts_dir / "diffs" / f"step_{4:04d}.patch")],
+                patches_applied = [str(diffs_dir / f"step_{4:04d}.patch")],
                 duration_sec = 0.0,
                 final_test_exit_code = step_5_result.exit_code,
                 final_test_passed = False,
             )
-
-
-
-
-
-
-
-
-
-
-
 
 
 
