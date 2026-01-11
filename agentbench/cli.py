@@ -13,6 +13,7 @@ from agentbench.llm.config import LLMConfig, LLMProvider, ProviderConfig
 from agentbench.llm.openrouter import OpenRouterClient
 from agentbench.logging import setup_logging
 from agentbench.run_task import run_task
+from agentbench.reporting.cli import report_app
 from agentbench.schemas.attempt_record import AttemptRecord
 from agentbench.suite_runner import run_suite
 from agentbench.tasks.exceptions import SuiteNotFoundError
@@ -24,6 +25,8 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 setup_logging()
+
+app.add_typer(report_app, name="report")
 
 
 def print_agent_summary(record: AttemptRecord) -> None:
@@ -197,6 +200,98 @@ def run_agent_cmd(
         raise typer.Exit(code=1) from None
 
 
+@app.command("run-agent-suite")
+def run_agent_suite_cmd(
+    suite: str = typer.Argument(..., help="Suite name (matches tasks/<suite>/...)"),
+    tasks_root: Path = typer.Option(Path("tasks"), "--tasks-root", "-r", help="Root directory containing task suites"),
+    variant: str = typer.Option("scripted", "--variant", "-v", help="Agent variant (scripted or llm_v0)"),
+    out_dir: Path = typer.Option(Path("artifacts"), "--out", "-o", help="Output directory for artifacts"),
+    log_llm_messages: bool | None = typer.Option(
+        None,
+        "--log-llm-messages/--no-log-llm-messages",
+        help="Write LLM request/response pairs to llm_messages.jsonl.",
+    ),
+    skip_baseline: bool = typer.Option(
+        False,
+        "--skip-baseline",
+        help="Skip baseline validation before running the agent.",
+    ),
+):
+    """
+    Run an agent on every task in a suite sequentially.
+
+    Artifacts are written under <out>/suite_runs/<suite>/<task_id>/.
+    """
+    try:
+        tasks = load_suite(tasks_root=tasks_root, suite_name=suite)
+    except SuiteNotFoundError:
+        console.print(f"[red]Suite not found under {tasks_root}: {suite}[/red]")
+        raise typer.Exit(code=1)
+
+    if not tasks:
+        console.print(f"[yellow]No tasks found in suite '{suite}'[/yellow]")
+        raise typer.Exit(code=1)
+
+    llm_config = None
+    llm_client = None
+    if variant == "llm_v0":
+        api_key_str = os.getenv("OPENROUTER_API_KEY")
+        if not api_key_str:
+            console.print("[red]Error: OPENROUTER_API_KEY environment variable is required for llm_v0[/red]")
+            raise typer.Exit(code=1)
+        model_name = os.getenv("MODEL_NAME", "anthropic/claude-3.5-sonnet")
+        llm_config = LLMConfig(
+            provider_config=ProviderConfig(
+                provider=LLMProvider.OPENROUTER,
+                model_name=model_name,
+                api_key=SecretStr(api_key_str),
+                timeout_sec=120,
+            )
+        )
+        llm_client = OpenRouterClient(config=llm_config)
+
+    results: list[AttemptRecord] = []
+    for task in tasks:
+        console.print(f"[bold blue]Running agent '{variant}' on task '{task.id}'...[/bold blue]")
+        workspace_dir = out_dir / "suite_runs" / suite / task.id / "workspace"
+        artifacts_dir = out_dir / "suite_runs" / suite / task.id / "agent_runs"
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        record = run_agent_attempt(
+            task=task,
+            workspace_dir=workspace_dir,
+            artifacts_dir=artifacts_dir,
+            llm_config=llm_config,
+            llm_client=llm_client,
+            variant_override=variant,
+            log_llm_messages=log_llm_messages,
+            skip_baseline=skip_baseline,
+        )
+        results.append(record)
+        print_agent_summary(record)
+        console.print(f"[dim]Artifacts saved to: {artifacts_dir}[/dim]\n")
+
+    # Suite summary
+    summary = Table(title=f"Suite Run Summary: {suite}")
+    summary.add_column("Task", style="cyan")
+    summary.add_column("Success", style="green")
+    summary.add_column("Exit", style="magenta")
+    summary.add_column("Stop Reason", style="yellow")
+    summary.add_column("Failure Reason", style="red")
+    for rec in results:
+        summary.add_row(
+            rec.task_id,
+            "✓" if rec.result.passed else "✗",
+            str(rec.result.exit_code),
+            str(rec.result.stop_reason or ""),
+            str(rec.result.failure_reason or ""),
+        )
+    console.print(summary)
+
+
 @app.command("validate-suite")
 def validate_suite_cmd(
     suite: str = typer.Argument(..., help="Suite name (e.g., custom-dev)"),
@@ -271,3 +366,7 @@ def main():
     Run tasks in isolated Docker containers and capture results.
     """
     pass
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()

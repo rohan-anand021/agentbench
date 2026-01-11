@@ -1,0 +1,31 @@
+task_spec_version: '1.0'
+id: psf__requests-2317
+suite: swe-bench-lite-10
+repo:
+  url: https://github.com/psf/requests
+  commit: 091991be0da19de9108dbe5e3752917fea3d7fdc
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q test_requests.py::RequestsTestCase::test_HTTP_302_ALLOW_REDIRECT_GET
+    test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA
+    test_requests.py::RequestsTestCase::test_basicauth_with_netrc test_requests.py::RequestsTestCase::test_json_param_post_content_type_works
+    test_requests.py::RequestsTestCase::test_manual_redirect_with_partial_body_read
+    test_requests.py::RequestsTestCase::test_requests_history_is_saved test_requests.py::TestTimeout::test_encoded_methods
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

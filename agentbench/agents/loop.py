@@ -234,9 +234,10 @@ class AgentLoop:
                     and result.error is not None
                     and result.error.error_type == "abnormal_exit"
                 )
-                # For non-RUN tool errors, allow agent to continue (records error in history)
+                # For non-RUN tool errors, stop with TOOL_ERROR to surface the failure.
+                # Only tolerate RUN errors that look like expected test failures.
                 is_non_run = action.tool_request.tool != ToolName.RUN
-                if not (is_expected_test_failure or is_non_run):
+                if is_non_run or not is_expected_test_failure:
                     duration = (
                         datetime.now(timezone.utc) - state.started_at
                     ).total_seconds()

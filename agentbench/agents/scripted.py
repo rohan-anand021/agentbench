@@ -115,6 +115,39 @@ class ScriptedAgent(Agent):
                     final_test_passed=False,
                 )
 
+        # Quick test run after setup: if tests already pass, return success early.
+        logs_dir = ensure_dir(artifacts_dir / "logs")
+        test_stdout = logs_dir / "initial_test_stdout.txt"
+        test_stderr = logs_dir / "initial_test_stderr.txt"
+        test_cmd = task.run.command
+        if repo_root != workspace_root:
+            test_cmd = f"cd repo && {test_cmd}"
+        event_logger.log_tests_started(command=task.run.command)
+        test_result = sandbox.run(
+            workspace_host_path=workspace_root,
+            command=test_cmd,
+            network="none",
+            timeout_sec=task.environment.timeout_sec,
+            stdout_path=test_stdout,
+            stderr_path=test_stderr,
+        )
+        event_logger.log_tests_finished(
+            exit_code=test_result.exit_code,
+            passed=test_result.exit_code == 0,
+            stdout_path=str(test_stdout),
+            stderr_path=str(test_stderr),
+        )
+        if test_result.exit_code == 0:
+            return AgentResult(
+                success=True,
+                stop_reason=StopReason.SUCCESS,
+                steps_taken=0,
+                patches_applied=[],
+                duration_sec=0.0,
+                final_test_exit_code=0,
+                final_test_passed=True,
+            )
+
         event_logger.log_agent_turn_started()
         logger.debug("Step 1: listing files")
 
@@ -330,8 +363,6 @@ class ScriptedAgent(Agent):
                 final_test_exit_code = step_5_result.exit_code,
                 final_test_passed = False,
             )
-
-
 
 
 

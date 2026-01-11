@@ -1,0 +1,27 @@
+task_spec_version: '1.0'
+id: astropy__astropy-14995
+suite: swe-bench-lite-local
+repo:
+  url: https://github.com/astropy/astropy
+  commit: b16c7d12ccbc7b2d20364b89fb44285bcbfede54
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q astropy/nddata/mixins/tests/test_ndarithmetic.py::test_nddata_bitmask_arithmetic
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

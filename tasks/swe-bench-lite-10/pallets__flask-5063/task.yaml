@@ -1,0 +1,27 @@
+task_spec_version: '1.0'
+id: pallets__flask-5063
+suite: swe-bench-lite-10
+repo:
+  url: https://github.com/pallets/flask
+  commit: 182ce3dd15dfa3537391c3efaf9c3ff407d134d4
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q tests/test_cli.py::TestRoutes::test_subdomain tests/test_cli.py::TestRoutes::test_host
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

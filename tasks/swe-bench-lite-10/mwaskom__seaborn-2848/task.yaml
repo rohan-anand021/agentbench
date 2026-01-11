@@ -1,0 +1,27 @@
+task_spec_version: '1.0'
+id: mwaskom__seaborn-2848
+suite: swe-bench-lite-10
+repo:
+  url: https://github.com/mwaskom/seaborn
+  commit: 94621cef29f80282436d73e8d2c0aa76dab81273
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q tests/test_relational.py::TestScatterPlotter::test_hue_order
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

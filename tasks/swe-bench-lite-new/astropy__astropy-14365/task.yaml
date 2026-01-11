@@ -1,0 +1,27 @@
+task_spec_version: '1.0'
+id: astropy__astropy-14365
+suite: swe-bench-lite-local
+repo:
+  url: https://github.com/astropy/astropy
+  commit: 7269fa3e33e8d02485a647da91a5a2a60a06af61
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q astropy/io/ascii/tests/test_qdp.py::test_roundtrip[True]
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

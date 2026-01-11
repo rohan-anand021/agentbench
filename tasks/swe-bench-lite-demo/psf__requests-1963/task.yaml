@@ -1,0 +1,32 @@
+task_spec_version: "1.0"
+id: psf__requests-1963
+suite: swe-bench-lite-demo
+labels:
+  - swe-bench-lite
+
+repo:
+  url: https://github.com/psf/requests
+  commit: 110048f9837f8441ea536804115e80b69f400277
+
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 300
+
+setup:
+  commands:
+    - pip install --upgrade pip
+    - pip install 'setuptools<69' wheel
+    - pip install 'setuptools_scm>=6.2'
+    - pip install 'oldest-supported-numpy' 'numpy<2'
+    - pip install 'cython==0.29.22'
+    - pip install extension-helpers
+    - pip install pytest
+    - pip install --no-build-isolation -e .
+
+run:
+  command: pytest -q test_requests.py::RequestsTestCase::test_DIGESTAUTH_QUOTES_QOP_VALUE test_requests.py::RequestsTestCase::test_DIGESTAUTH_WRONG_HTTP_401_GET test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE test_requests.py::RequestsTestCase::test_DIGEST_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA test_requests.py::RequestsTestCase::test_param_cookiejar_works test_requests.py::TestRedirects::test_requests_are_updated_each_time
+
+agent:
+  entrypoint: llm_v0
+  max_steps: 20

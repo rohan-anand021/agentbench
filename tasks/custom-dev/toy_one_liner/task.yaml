@@ -1,0 +1,27 @@
+task_spec_version: "1.0"
+id: toy_one_liner
+suite: custom-dev
+harness_min_version: "0.1.0"
+labels:
+  - toy
+
+repo:
+  url: examples/toy_repo
+  commit: 8b2d107781ccba9ae05308d60cde2e6fd074db8f
+
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 300
+
+setup:
+  commands:
+    - pip install --upgrade pip
+    - pip install . --target=/workspace/site-packages
+
+run:
+  command: PYTHONPATH=/workspace/site-packages pytest -q
+
+agent:
+  entrypoint: llm_v0
+  max_steps: 10

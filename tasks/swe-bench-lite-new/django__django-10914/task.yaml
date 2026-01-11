@@ -1,0 +1,27 @@
+task_spec_version: '1.0'
+id: django__django-10914
+suite: swe-bench-lite-local
+repo:
+  url: https://github.com/django/django
+  commit: e7fd69d051eaa67cb17f172a39b57253e9cb831a
+environment:
+  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  workdir: /workspace
+  timeout_sec: 180
+setup:
+  commands:
+  - pip install --upgrade pip
+  - pip install 'setuptools<69' wheel
+  - pip install 'setuptools_scm>=6.2'
+  - pip install 'oldest-supported-numpy' 'numpy<2'
+  - pip install 'cython==0.29.22'
+  - pip install extension-helpers
+  - pip install pytest
+  - pip install --no-build-isolation -e .
+run:
+  command: pytest -q test_override_file_upload_permissions (test_utils.tests.OverrideSettingsTests)
+agent:
+  entrypoint: llm_v0
+  max_steps: 20
+labels:
+- swe-bench-lite

@@ -1,0 +1,3 @@
+{"task_id": "t_pass", "suite": "suite_min", "variant": "v_min", "result": {"passed": true, "exit_code": 0}, "duration_sec": 1.2}
+{"task_id": "t_fail", "suite": "suite_min", "variant": "v_min", "result": {"passed": false, "exit_code": 1, "failure_reason": "TESTS_FAILED"}, "duration_sec": 2.5}
+{invalid json line}
