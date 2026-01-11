@@ -1,6 +1,6 @@
 ## AgentBench
 
-Offline harness for running and evaluating coding agents inside locked-down Docker sandboxes. The project ships a CLI (`ab`), task schema, execution pipeline, tool API for agents, and artifact formats so runs are reproducible and debuggable.
+Offline harness for running and evaluating coding agents inside locked-down Docker sandboxes. The project ships a CLI (`agentbench`), task schema, execution pipeline, tool API for agents, and artifact formats so runs are reproducible and debuggable.
 
 ### Repository Layout (high level)
 - `agentbench/`: core library (CLI, agent loop, tools, sandbox, schemas, scoring, task loading/validation, utilities)
@@ -86,11 +86,11 @@ Each task is described by `task.yaml` (see `tasks/custom-dev/toy_fail_pytest/tas
 - `AttemptRecord` schema in `agentbench/schemas/attempt_record.py` (versioned `schema_version="0.1.0"`), with nested `BaselineValidationResult`, `TaskResult`, `LimitsConfig`, and optional `ModelConfig`.
 - Failure taxonomy documented in `agentbench/scoring/README.md`; mapping implemented in `agentbench/scoring/taxonomy.py`.
 
-### CLI (`ab`, defined in `agentbench/cli.py`)
-- `ab run-task TASK.yaml [--out artifacts]`: clone → setup → run tests, capture artifacts.
-- `ab run-agent --task TASK.yaml [--variant scripted|llm_v0] [--out artifacts] [--strict-patch] [--skip-baseline] [--log-llm-messages/--no-log-llm-messages]`: run an agent. `llm_v0` requires `OPENROUTER_API_KEY` (and optional `MODEL_NAME`).
-- `ab validate-suite SUITE [--tasks tasks] [--out artifacts] [--include-flaky]`: baseline validation for all tasks in a suite.
-- `ab list-tasks SUITE [--tasks tasks]`: list task IDs in a suite.
+### CLI (`agentbench`, defined in `agentbench/cli.py`; invoke with `uv run agentbench ...`)
+- `uv run agentbench run-task TASK.yaml [--out artifacts]`: clone → setup → run tests, capture artifacts.
+- `uv run agentbench run-agent --task TASK.yaml [--variant scripted|llm_v0] [--out artifacts] [--strict-patch] [--skip-baseline] [--log-llm-messages/--no-log-llm-messages]`: run an agent. `llm_v0` requires `OPENROUTER_API_KEY` (and optional `MODEL_NAME`).
+- `uv run agentbench validate-suite SUITE [--tasks tasks] [--out artifacts] [--include-flaky]`: baseline validation for all tasks in a suite.
+- `uv run agentbench list-tasks SUITE [--tasks tasks]`: list task IDs in a suite.
 
 ### Helper Scripts
 - `scripts/benchmark_models.py`: run the same task across multiple models (reads `scripts/models.txt` or a custom list), optional probe calls, per-model artifact directories, and summary table/JSON export.
@@ -98,7 +98,7 @@ Each task is described by `task.yaml` (see `tasks/custom-dev/toy_fail_pytest/tas
 - `scripts/import_swebench.py`, `scripts/openrouter_call.py`, `scripts/demo_scripted_agent.sh`: dataset/import and convenience helpers.
 
 ### Development Notes
-- Python ≥3.11. Dependencies in `pyproject.toml`; CLI entry point is `ab`.
+- Python ≥3.11. Dependencies in `pyproject.toml`; CLI entry point is `agentbench` (run via `uv run agentbench`).
 - Tests use pytest (filtered to `agentbench/` paths). Default markers exclude `integration`/`docker`.
 - Formatting/linting defaults: Ruff with relaxed rules (see `[tool.ruff]` in `pyproject.toml`).
 - Docker must be available locally; runner image reference: `ghcr.io/agentbench/py-runner:0.1.0` (see `docker/py-runner/Dockerfile` and README).
@@ -106,13 +106,13 @@ Each task is described by `task.yaml` (see `tasks/custom-dev/toy_fail_pytest/tas
 ### Example Usage
 ```bash
 # Validate sample suite (baseline should fail)
-ab validate-suite custom-dev --tasks tasks --out artifacts
+uv run agentbench validate-suite custom-dev --tasks tasks --out artifacts
 
 # Run scripted agent on toy task (no LLM required)
-ab run-agent --task tasks/custom-dev/toy_fail_pytest/task.yaml --variant scripted --out artifacts
+uv run agentbench run-agent --task tasks/custom-dev/toy_fail_pytest/task.yaml --variant scripted --out artifacts
 
 # Run LLM agent (requires OPENROUTER_API_KEY)
 MODEL_NAME=anthropic/claude-3.5-sonnet \
 OPENROUTER_API_KEY=... \
-ab run-agent --task tasks/custom-dev/toy_fail_pytest/task.yaml --variant llm_v0 --out artifacts
+uv run agentbench run-agent --task tasks/custom-dev/toy_fail_pytest/task.yaml --variant llm_v0 --out artifacts
 ```

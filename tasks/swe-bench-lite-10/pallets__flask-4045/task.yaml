@@ -5,12 +5,13 @@ repo:
   url: https://github.com/pallets/flask
   commit: d8c37f43724cd9fb0870f77877b7c4c7e38a19e0
 environment:
-  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  docker_image: python:3.9-slim
   workdir: /workspace
   timeout_sec: 180
 setup:
   commands:
   - pip install --upgrade pip
+  - pip install "werkzeug<2.1"
   - pip install 'setuptools<69' wheel
   - pip install 'setuptools_scm>=6.2'
   - pip install 'oldest-supported-numpy' 'numpy<2'
@@ -19,7 +20,9 @@ setup:
   - pip install pytest
   - pip install --no-build-isolation -e .
 run:
-  command: pytest -q tests/test_blueprints.py::test_dotted_name_not_allowed tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots
+  command: >
+    pytest -q tests/test_blueprints.py -k
+    "dotted_name_not_allowed or route_decorator_custom_endpoint_with_dots"
 agent:
   entrypoint: llm_v0
   max_steps: 20

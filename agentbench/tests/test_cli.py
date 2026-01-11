@@ -41,6 +41,9 @@ class TestRunTaskCommand:
 
         assert result.exit_code == 0
         mock_run_task.assert_called_once()
+        args, kwargs = mock_run_task.call_args
+        assert args[0] == task_yaml
+        assert kwargs.get("sandbox_mode") == "bind"
 
     @patch("agentbench.cli.run_task")
     def test_run_task_custom_output_dir(self, mock_run_task, tmp_path: Path):

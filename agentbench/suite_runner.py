@@ -36,6 +36,7 @@ def run_suite(
     tasks_root: Path,
     out_dir: Path,
     skip_labels: set[str] | None = None,
+    sandbox_mode: str = "bind",
 ) -> Path | None:
     """
     Run baseline validation on all tasks in a suite.
@@ -144,6 +145,7 @@ def run_suite(
                         task=task,
                         workspace_dir=task_workspace,
                         logs_dir=Path(logs_parent_dir / task.id),
+                        sandbox_mode=sandbox_mode,
                     )
 
                     if validation_result.valid:

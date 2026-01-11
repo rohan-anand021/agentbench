@@ -5,12 +5,14 @@ repo:
   url: https://github.com/mwaskom/seaborn
   commit: 0f5a013e2cf43562deec3b879458e59a73853813
 environment:
-  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  docker_image: python:3.9-slim
   workdir: /workspace
   timeout_sec: 180
 setup:
   commands:
   - pip install --upgrade pip
+  - pip install "numpy==1.23.2"
+  - pip install "flit-core<4"
   - pip install 'setuptools<69' wheel
   - pip install 'setuptools_scm>=6.2'
   - pip install 'oldest-supported-numpy' 'numpy<2'

@@ -2,6 +2,7 @@
 
 from .docker_sandbox import DockerSandbox
 from .models import DockerRunResult
+from .persistent_sandbox import PersistentDockerSandbox
 from .filesystem import (
     PathEscapeError,
     SymLinkError,
@@ -11,6 +12,7 @@ from .filesystem import (
 
 __all__ = [
     "DockerSandbox",
+    "PersistentDockerSandbox",
     "DockerRunResult",
     "PathEscapeError",
     "SymLinkError",

@@ -68,6 +68,11 @@ def run_task_cmd(
         "-o",
         help="Output directory for artifacts",
     ),
+    sandbox_mode: str = typer.Option(
+        "bind",
+        "--sandbox-mode",
+        help="Sandbox mode to use: bind or ephemeral",
+    ),
 ):
     """
     Execute a task defined in a YAML file.
@@ -82,7 +87,10 @@ def run_task_cmd(
         raise typer.BadParameter("Missing task path. Provide TASK or --task.")
 
     logger.info("Running task from %s", task_path)
-    path = run_task(task_path, out)
+    try:
+        path = run_task(task_path, out, sandbox_mode=sandbox_mode)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
     logger.info("Task completed, artifacts saved to %s", path)
     typer.echo(f"Run completed. Artifacts saved to: {path}")
 
@@ -121,6 +129,11 @@ def run_agent_cmd(
         False,
         "--skip-baseline",
         help="Skip baseline validation before running the agent.",
+    ),
+    sandbox_mode: str = typer.Option(
+        "bind",
+        "--sandbox-mode",
+        help="Sandbox mode for agent run (bind; ephemeral not supported).",
     ),
 ):
     """
@@ -181,6 +194,7 @@ def run_agent_cmd(
             variant_override=variant,
             log_llm_messages=log_llm_messages,
             skip_baseline=skip_baseline,
+            sandbox_mode=sandbox_mode,
         )
         
         print_agent_summary(record)
@@ -215,6 +229,11 @@ def run_agent_suite_cmd(
         False,
         "--skip-baseline",
         help="Skip baseline validation before running the agent.",
+    ),
+    sandbox_mode: str = typer.Option(
+        "bind",
+        "--sandbox-mode",
+        help="Sandbox mode for agent suite run (bind; ephemeral not supported).",
     ),
 ):
     """
@@ -269,6 +288,7 @@ def run_agent_suite_cmd(
             variant_override=variant,
             log_llm_messages=log_llm_messages,
             skip_baseline=skip_baseline,
+            sandbox_mode=sandbox_mode,
         )
         results.append(record)
         print_agent_summary(record)
@@ -309,6 +329,11 @@ def validate_suite_cmd(
         "--include-flaky",
         help="Include tasks labeled 'flaky' (skipped by default)",
     ),
+    sandbox_mode: str = typer.Option(
+        "bind",
+        "--sandbox-mode",
+        help="Sandbox mode for validation (bind or ephemeral).",
+    ),
 ):
     """
     Validate all tasks in a suite.
@@ -324,6 +349,7 @@ def validate_suite_cmd(
             tasks_root=tasks_root,
             out_dir=out,
             skip_labels=skip_labels,
+            sandbox_mode=sandbox_mode,
         )
 
         if runs_dir is None:

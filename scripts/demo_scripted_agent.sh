@@ -16,7 +16,7 @@ mkdir -p "$DEMO_OUT"
 echo "Running the scripted agent on toy_fail_pytest..."
 echo ""
 
-uv run ab run-agent \
+uv run agentbench run-agent \
     --task tasks/custom-dev/toy_fail_pytest/task.yaml \
     --variant scripted \
     --out "$DEMO_OUT"

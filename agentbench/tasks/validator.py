@@ -4,7 +4,8 @@ import re
 import time
 from pathlib import Path
 
-from agentbench.sandbox.docker_sandbox import DockerSandbox
+from agentbench.sandbox import DockerSandbox
+from agentbench.sandbox.persistent_sandbox import PersistentDockerSandbox
 from agentbench.scoring import FailureReason
 from agentbench.tasks.models import TaskSpec, ValidationResult, ValidationSpec
 from agentbench.util.attempt import AttemptContext
@@ -13,12 +14,20 @@ from agentbench.util.git import (
     clone_repo,
     diff_patch,
     diff_stat,
+    sandbox_checkout,
+    sandbox_clone,
+    sandbox_diff_patch,
+    sandbox_diff_stat,
+    sandbox_status_porcelain,
     status_porcelain,
+    ensure_git_in_sandbox,
 )
 from agentbench.util.commands import normalize_setup_commands
 from agentbench.util.paths import ensure_dir
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_SANDBOX_MODES = {"bind", "ephemeral"}
 
 
 def _resolve_repo_url(repo_url: str, task_source_path: Path) -> str:
@@ -122,7 +131,10 @@ def _evaluate_expectations(
 
 
 def validate_baseline(
-    task: TaskSpec, workspace_dir: Path, logs_dir: Path
+    task: TaskSpec,
+    workspace_dir: Path,
+    logs_dir: Path,
+    sandbox_mode: str = "bind",
 ) -> ValidationResult:
     """
     Validate that a task's tests fail before any agent intervention.
@@ -135,39 +147,23 @@ def validate_baseline(
     - Returns `ValidationResult`
     """
 
-    """
-    ### Integrate Attempt Recording
-    - [ ] Update `validate_baseline()` to record attempts:
-    - Generate ULID for each validation run
-    - Record start/end timestamps
-    - Write `AttemptRecord` to `attempts.jsonl` in the run directory
-    """
-
-    """
-    - `BaselineValidationResult`:
-        `attempted: bool`,
-        `failed_as_expected: bool`,
-        `exit_code: int`
-
-    - `TaskResult`:
-        `passed: bool`,
-        `exit_code: int`,
-        `failure_reason: str | None`
-    """
+    if sandbox_mode not in ALLOWED_SANDBOX_MODES:
+        raise ValueError(f"Unsupported sandbox mode: {sandbox_mode}")
 
     logs_dir = ensure_dir(logs_dir)
-    repo_dir = ensure_dir(workspace_dir / "repo")
+    repo_dir = workspace_dir / "repo"
+    if sandbox_mode == "bind":
+        repo_dir = ensure_dir(repo_dir)
     stdout_path = None
     stderr_path = None
     start_time = time.monotonic()
+    sandbox: DockerSandbox | PersistentDockerSandbox | None = None
+    run_network = "bridge" if ("network" in (task.labels or [])) else "none"
 
     with AttemptContext(
         task=task, logs_dir=logs_dir, variant="baseline"
     ) as attempt:
         try:
-            # git clone
-            attempt.mark_stage(stage="git_clone")
-
             repo_url = _resolve_repo_url(task.repo.url, task.source_path)
             if repo_url != task.repo.url:
                 logger.info(
@@ -176,9 +172,61 @@ def validate_baseline(
                     repo_url,
                 )
 
-            stdout_path, stderr_path, exit_code = clone_repo(
-                url=repo_url, dest=repo_dir, logs_dir=logs_dir
-            )
+            attempt.mark_stage(stage="git_clone")
+            if sandbox_mode == "bind":
+                stdout_path, stderr_path, exit_code = clone_repo(
+                    url=repo_url, dest=repo_dir, logs_dir=logs_dir
+                )
+            else:
+                sandbox = PersistentDockerSandbox(
+                    image=task.environment.docker_image,
+                    workdir=task.environment.workdir,
+                )
+                sandbox.start()
+                if not ensure_git_in_sandbox(
+                    sandbox=sandbox, logs_dir=logs_dir
+                ):
+                    attempt.set_failure_reason(
+                        reason=FailureReason.GIT_CLONE_FAILED
+                    )
+                    raise RuntimeError(
+                        "git is not available in sandbox and installation attempts failed"
+                    )
+                sandbox.exec(
+                    command="mkdir -p repo",
+                    stdout_path=logs_dir / "repo_mkdir_stdout.txt",
+                    stderr_path=logs_dir / "repo_mkdir_stderr.txt",
+                    timeout_sec=30,
+                    network="none",
+                )
+                repo_url_for_clone = repo_url
+                local_repo_path = None
+                if repo_url.startswith("file://"):
+                    local_repo_path = Path(repo_url[len("file://") :])
+                else:
+                    candidate = Path(repo_url)
+                    if candidate.exists():
+                        local_repo_path = candidate
+
+                if local_repo_path and local_repo_path.exists():
+                    container_src = (
+                        f"{task.environment.workdir.rstrip('/')}/src_repo"
+                    )
+                    logger.info(
+                        "Copying local repo %s into sandbox at %s",
+                        local_repo_path,
+                        container_src,
+                    )
+                    sandbox.copy_to(local_repo_path, container_src)
+                    repo_url_for_clone = container_src
+
+                stdout_path, stderr_path, exit_code = sandbox_clone(
+                    sandbox=sandbox,
+                    repo_url=repo_url_for_clone,
+                    dest="repo",
+                    logs_dir=logs_dir,
+                    timeout_sec=task.environment.timeout_sec,
+                )
 
             attempt.set_exit_code(exit_code)
             attempt.add_artifact("clone_stdout", str(stdout_path))
@@ -194,10 +242,18 @@ def validate_baseline(
 
             # git checkout
             attempt.mark_stage(stage="git_checkout")
-
-            stdout_path, stderr_path, exit_code = checkout_commit(
-                repo_dir=repo_dir, commit=task.repo.commit, logs_dir=logs_dir
-            )
+            if sandbox_mode == "bind":
+                stdout_path, stderr_path, exit_code = checkout_commit(
+                    repo_dir=repo_dir, commit=task.repo.commit, logs_dir=logs_dir
+                )
+            else:
+                stdout_path, stderr_path, exit_code = sandbox_checkout(
+                    sandbox=sandbox,
+                    repo_dir="repo",
+                    commit=task.repo.commit,
+                    logs_dir=logs_dir,
+                    timeout_sec=task.environment.timeout_sec,
+                )
 
             attempt.set_exit_code(exit_code)
             attempt.add_artifact("checkout_stdout", str(stdout_path))
@@ -211,10 +267,11 @@ def validate_baseline(
                     f"git checkout failed with exit code: {exit_code}"
                 )
 
-            sandbox = DockerSandbox(
-                image=task.environment.docker_image,
-                workdir=task.environment.workdir,
-            )
+            if sandbox_mode == "bind":
+                sandbox = DockerSandbox(
+                    image=task.environment.docker_image,
+                    workdir=task.environment.workdir,
+                )
 
             setup_commands = " && ".join(
                 normalize_setup_commands(
@@ -227,7 +284,6 @@ def validate_baseline(
             logger.info("Running setup commands")
             logger.debug("Setup commands: %s", setup_commands)
 
-            # setup run
             attempt.mark_stage(stage="setup")
             setup_stdout_path = Path(logs_dir, "setup_stdout.txt")
             setup_stderr_path = Path(logs_dir, "setup_stderr.txt")
@@ -235,16 +291,24 @@ def validate_baseline(
                 setup_commands = (
                     f"cd {repo_relative_path} && {setup_commands}"
                 )
-                # Give more time for setup (pip installs can be slow)
                 setup_timeout = max(task.environment.timeout_sec, 180)
-                setup_run_result = sandbox.run(
-                    workspace_host_path=workspace_dir,
-                    command=setup_commands,
-                    network="bridge",
-                    timeout_sec=setup_timeout,
-                    stdout_path=setup_stdout_path,
-                    stderr_path=setup_stderr_path,
-                )
+                if sandbox_mode == "bind":
+                    setup_run_result = sandbox.run(
+                        workspace_host_path=workspace_dir,
+                        command=setup_commands,
+                        network="bridge",
+                        timeout_sec=setup_timeout,
+                        stdout_path=setup_stdout_path,
+                        stderr_path=setup_stderr_path,
+                    )
+                else:
+                    setup_run_result = sandbox.exec(
+                        command=setup_commands,
+                        stdout_path=setup_stdout_path,
+                        stderr_path=setup_stderr_path,
+                        timeout_sec=setup_timeout,
+                        network="bridge",
+                    )
 
                 exit_code = setup_run_result.exit_code
                 stdout_path = setup_run_result.stdout_path
@@ -282,24 +346,40 @@ def validate_baseline(
 
             logger.debug("Setup completed successfully")
 
-            status_stdout, status_stderr, status_exit = status_porcelain(
-                repo_dir=repo_dir,
-                logs_dir=logs_dir,
-            )
+            if sandbox_mode == "bind":
+                status_stdout, status_stderr, status_exit = status_porcelain(
+                    repo_dir=repo_dir,
+                    logs_dir=logs_dir,
+                )
+                diff_stat_stdout, diff_stat_stderr, diff_stat_exit = diff_stat(
+                    repo_dir=repo_dir,
+                    logs_dir=logs_dir,
+                )
+                diff_stdout, diff_stderr, diff_exit = diff_patch(
+                    repo_dir=repo_dir,
+                    logs_dir=logs_dir,
+                )
+            else:
+                status_stdout, status_stderr, status_exit = sandbox_status_porcelain(
+                    sandbox=sandbox,
+                    repo_dir="repo",
+                    logs_dir=logs_dir,
+                )
+                diff_stat_stdout, diff_stat_stderr, diff_stat_exit = sandbox_diff_stat(
+                    sandbox=sandbox,
+                    repo_dir="repo",
+                    logs_dir=logs_dir,
+                )
+                diff_stdout, diff_stderr, diff_exit = sandbox_diff_patch(
+                    sandbox=sandbox,
+                    repo_dir="repo",
+                    logs_dir=logs_dir,
+                )
+
             attempt.add_artifact("post_setup_status_stdout", str(status_stdout))
             attempt.add_artifact("post_setup_status_stderr", str(status_stderr))
-
-            diff_stat_stdout, diff_stat_stderr, diff_stat_exit = diff_stat(
-                repo_dir=repo_dir,
-                logs_dir=logs_dir,
-            )
             attempt.add_artifact("post_setup_diff_stat_stdout", str(diff_stat_stdout))
             attempt.add_artifact("post_setup_diff_stat_stderr", str(diff_stat_stderr))
-
-            diff_stdout, diff_stderr, diff_exit = diff_patch(
-                repo_dir=repo_dir,
-                logs_dir=logs_dir,
-            )
             attempt.add_artifact("post_setup_diff_stdout", str(diff_stdout))
             attempt.add_artifact("post_setup_diff_stderr", str(diff_stderr))
 
@@ -331,23 +411,31 @@ def validate_baseline(
                     "Setup modified tracked files; continuing (enforce_clean_setup is false)"
                 )
 
-            run_cmd = task.run.command
-            run_cmd = f"cd repo && {run_cmd}"
+            run_cmd = f"cd repo && {task.run.command}"
 
             logger.info("Running task command")
             logger.debug("Run command: %s", run_cmd)
 
-            # run
             attempt.mark_stage(stage="baseline_run")
-
-            run_run_result = sandbox.run(
-                workspace_host_path=workspace_dir,
-                command=run_cmd,
-                network="none",
-                timeout_sec=task.environment.timeout_sec,
-                stdout_path=Path(logs_dir, "run_stdout.txt"),
-                stderr_path=Path(logs_dir, "run_stderr.txt"),
-            )
+            run_stdout = Path(logs_dir, "run_stdout.txt")
+            run_stderr = Path(logs_dir, "run_stderr.txt")
+            if sandbox_mode == "bind":
+                run_run_result = sandbox.run(
+                    workspace_host_path=workspace_dir,
+                    command=run_cmd,
+                    network=run_network,
+                    timeout_sec=task.environment.timeout_sec,
+                    stdout_path=run_stdout,
+                    stderr_path=run_stderr,
+                )
+            else:
+                run_run_result = sandbox.exec(
+                    command=run_cmd,
+                    network=run_network,
+                    timeout_sec=task.environment.timeout_sec,
+                    stdout_path=run_stdout,
+                    stderr_path=run_stderr,
+                )
 
             exit_code = run_run_result.exit_code
             stdout_path = run_run_result.stdout_path
@@ -431,14 +519,23 @@ def validate_baseline(
                 rerun_timeout = max(1, int(remaining))
                 rerun_stdout = Path(logs_dir, "run_rerun_stdout.txt")
                 rerun_stderr = Path(logs_dir, "run_rerun_stderr.txt")
-                rerun_result = sandbox.run(
-                    workspace_host_path=workspace_dir,
-                    command=run_cmd,
-                    network="none",
-                    timeout_sec=rerun_timeout,
-                    stdout_path=rerun_stdout,
-                    stderr_path=rerun_stderr,
-                )
+                if sandbox_mode == "bind":
+                    rerun_result = sandbox.run(
+                        workspace_host_path=workspace_dir,
+                        command=run_cmd,
+                        network=run_network,
+                        timeout_sec=rerun_timeout,
+                        stdout_path=rerun_stdout,
+                        stderr_path=rerun_stderr,
+                    )
+                else:
+                    rerun_result = sandbox.exec(
+                        command=run_cmd,
+                        network=run_network,
+                        timeout_sec=rerun_timeout,
+                        stdout_path=rerun_stdout,
+                        stderr_path=rerun_stderr,
+                    )
 
                 attempt.add_artifact("run_rerun_stdout", str(rerun_stdout))
                 attempt.add_artifact("run_rerun_stderr", str(rerun_stderr))
@@ -490,6 +587,9 @@ def validate_baseline(
 
         except Exception as e:
             logger.error("Validation failed: %s", str(e))
+        finally:
+            if isinstance(sandbox, PersistentDockerSandbox):
+                sandbox.cleanup()
 
     return ValidationResult(
         task_id=task.id,

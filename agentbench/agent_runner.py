@@ -61,6 +61,7 @@ def run_agent_attempt(
     variant_override: str | None = None,
     log_llm_messages: bool | None = None,
     skip_baseline: bool = False,
+    sandbox_mode: str = "bind",
     ) -> AttemptRecord:
     """
     Run an agent attempt on a task.
@@ -72,6 +73,9 @@ def run_agent_attempt(
     4. Run final tests
     5. Record attempt
     """
+
+    if sandbox_mode != "bind":
+        raise ValueError("sandbox_mode=ephemeral is not supported for agent runs")
 
     run_id = str(ulid.ULID())
     started_at = datetime.now(timezone.utc)
@@ -164,7 +168,8 @@ def run_agent_attempt(
             validation_result = validate_baseline(
                 task = task,
                 workspace_dir = workspace_dir,
-                logs_dir = artifacts_dir / "logs"
+                logs_dir = artifacts_dir / "logs",
+                sandbox_mode = sandbox_mode,
             )
 
             if validation_result.exit_code == 0:

@@ -19,26 +19,86 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from agentbench.tasks.loader import load_task
 from agentbench.tasks.validator import validate_baseline
 from agentbench.util.paths import ensure_dir
+
+DEFAULT_MODELS_FILE = Path(__file__).with_name("models.txt")
+
+
+def _load_default_models() -> list[str]:
+    if DEFAULT_MODELS_FILE.is_file():
+        models: list[str] = []
+        with DEFAULT_MODELS_FILE.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "#" in line:
+                    line = line.split("#", 1)[0].strip()
+                if line:
+                    models.append(line)
+        # Narrow to user-requested models if present
+        filtered = [
+            m for m in models
+            if "kimi-k2" in m or "claude-3.7-sonnet" in m
+        ]
+        if filtered:
+            return filtered
+        return models
+    # Fallback to explicit known IDs
+    return [
+        "moonshotai/kimi-k2",
+        "anthropic/claude-3.7-sonnet",
+    ]
+
 # Default models to benchmark (edit this list as needed)
-DEFAULT_MODELS = [
-    # Free tier (likely won't work well)
-    # "mistralai/devstral-2512:free",
-    
-    # Budget options
-    "anthropic/claude-3-haiku",
-    "openai/gpt-4o-mini",
-    
-    # Mid-tier
-    "anthropic/claude-3.5-sonnet",
-    "openai/gpt-4o",
-    
-    # Top tier
-    # "anthropic/claude-3-opus",
-    # "openai/o1-preview",
-]
+DEFAULT_MODELS = _load_default_models()
+
+
+def _run_baseline_check(task_path: Path, out_dir: Path, sandbox_mode: str):
+    """Run a baseline validation in the requested sandbox mode and ensure repo is not persisted locally."""
+    task = load_task(task_path)
+    baseline_root = ensure_dir(out_dir)
+    workspace_dir = baseline_root / "workspace"
+    logs_dir = baseline_root / "logs"
+    if workspace_dir.exists():
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nRunning baseline validation with sandbox_mode={sandbox_mode} in {baseline_root}...")
+    baseline_result = validate_baseline(
+        task=task,
+        workspace_dir=workspace_dir,
+        logs_dir=logs_dir,
+        sandbox_mode=sandbox_mode,
+    )
+    repo_path = workspace_dir / "repo"
+    if sandbox_mode == "ephemeral":
+        if repo_path.exists():
+            raise RuntimeError("Repo exists on host after ephemeral baseline; expected no host checkout")
+        print("Verified: repo not present on host after ephemeral baseline.")
+    if baseline_result.exit_code == 0:
+        raise RuntimeError("Baseline validation passed unexpectedly - task is invalid")
+    return baseline_result
+
+
+def _maybe_override_docker_image(task_path: Path, override: str | None, out_dir: Path) -> Path:
+    """If override is set, write a patched task file under out_dir and return its path."""
+    if not override:
+        return task_path
+    with task_path.open() as f:
+        data = yaml.safe_load(f)
+    data.setdefault("environment", {})
+    data["environment"]["docker_image"] = override
+    patched_dir = ensure_dir(out_dir / "task_override")
+    patched_path = patched_dir / task_path.name
+    with patched_path.open("w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    print(f"Using docker_image override: {override} (patched task at {patched_path})")
+    return patched_path
 
 def _find_events_path(out_dir: Path) -> Path | None:
     runs_dir = out_dir / "agent_runs"
@@ -206,11 +266,16 @@ def run_agent(
     log_llm_messages: bool | None = None,
     skip_baseline: bool = False,
     strict_patch: bool = False,
+    sandbox_mode: str = "bind",
 ) -> dict:
     """Run agent with a specific model and return results."""
     
     env = os.environ.copy()
     env["MODEL_NAME"] = model
+    if sandbox_mode != "bind":
+        # Agent flow still requires host workspace; fallback to bind.
+        print(f"  [warning] sandbox_mode={sandbox_mode} not supported for agent runs; using bind")
+        sandbox_mode = "bind"
     
     cmd = [
         sys.executable, "-c",
@@ -219,6 +284,7 @@ def run_agent(
         "--task", task_path,
         "--variant", "llm_v0",
         "--out", str(out_dir),
+        "--sandbox-mode", sandbox_mode,
     ]
     if log_llm_messages is True:
         cmd.append("--log-llm-messages")
@@ -366,6 +432,16 @@ def main():
     parser.add_argument("--task", required=True, help="Path to task.yaml")
     parser.add_argument("--models", help="Path to file with model names (one per line)")
     parser.add_argument("--out", default="artifacts/benchmark", help="Output directory")
+    parser.add_argument(
+        "--sandbox-mode",
+        choices=["bind", "ephemeral"],
+        default="ephemeral",
+        help="Sandbox mode for baseline precheck (agent runs remain bind).",
+    )
+    parser.add_argument(
+        "--docker-image-override",
+        help="Override task.environment.docker_image (writes a patched task file for this run).",
+    )
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     parser.add_argument(
         "--timeout-sec",
@@ -441,25 +517,35 @@ def main():
         sys.exit(1)
     
     out_dir = Path(args.out)
+    task_path = Path(args.task)
+    task_path_for_run = _maybe_override_docker_image(
+        task_path=task_path,
+        override=args.docker_image_override,
+        out_dir=out_dir,
+    )
     results = []
 
+    # If using ephemeral mode, run a precheck to ensure repo stays in-container.
+    if args.sandbox_mode == "ephemeral" and not args.baseline_once:
+        try:
+            _run_baseline_check(
+                task_path=task_path_for_run,
+                out_dir=Path(args.out) / "precheck_ephemeral",
+                sandbox_mode=args.sandbox_mode,
+            )
+        except RuntimeError as err:
+            print(f"ERROR during sandbox precheck: {err}")
+            sys.exit(1)
+
     if args.baseline_once:
-        task = load_task(Path(args.task))
-        baseline_root = ensure_dir(out_dir / "baseline")
-        workspace_dir = baseline_root / "workspace"
-        logs_dir = baseline_root / "logs"
-        if workspace_dir.exists():
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        print("\nRunning baseline validation once...")
-        baseline_result = validate_baseline(
-            task=task,
-            workspace_dir=workspace_dir,
-            logs_dir=logs_dir,
-        )
-        if baseline_result.exit_code == 0:
-            print("Baseline validation passed unexpectedly - task is invalid")
+        try:
+            _run_baseline_check(
+                task_path=task_path_for_run,
+                out_dir=Path(args.out) / "baseline",
+                sandbox_mode=args.sandbox_mode,
+            )
+        except RuntimeError as err:
+            print(f"ERROR during baseline validation: {err}")
             sys.exit(1)
     
     for i, model in enumerate(models, 1):
@@ -512,13 +598,14 @@ def main():
             }
         else:
             result = run_agent(
-                args.task,
+                str(task_path_for_run),
                 model,
                 model_out,
                 args.timeout_sec,
                 log_llm_messages=log_llm_messages,
                 skip_baseline=skip_baseline,
                 strict_patch=args.strict_patch,
+                sandbox_mode=args.sandbox_mode,
             )
         if probe_results:
             result["probe"] = probe_results

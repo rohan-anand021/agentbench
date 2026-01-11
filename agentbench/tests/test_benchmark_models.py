@@ -27,6 +27,7 @@ def test_benchmark_models_log_flags(monkeypatch, tmp_path, flags, expected):
         log_llm_messages=None,
         skip_baseline=False,
         strict_patch=False,
+        sandbox_mode="bind",
     ):
         called.append(log_llm_messages)
         return {
@@ -68,7 +69,7 @@ def test_benchmark_models_baseline_once(monkeypatch, tmp_path):
     baseline_calls = []
     run_calls = []
 
-    def fake_validate_baseline(task, workspace_dir, logs_dir):
+    def fake_validate_baseline(task, workspace_dir, logs_dir, sandbox_mode="bind"):
         baseline_calls.append((workspace_dir, logs_dir))
         return SimpleNamespace(exit_code=1)
 
@@ -80,6 +81,7 @@ def test_benchmark_models_baseline_once(monkeypatch, tmp_path):
         log_llm_messages=None,
         skip_baseline=False,
         strict_patch=False,
+        sandbox_mode="bind",
     ):
         run_calls.append(skip_baseline)
         return {
@@ -125,7 +127,7 @@ def test_benchmark_models_skip_baseline(monkeypatch, tmp_path):
     baseline_calls = []
     run_calls = []
 
-    def fake_validate_baseline(task, workspace_dir, logs_dir):
+    def fake_validate_baseline(task, workspace_dir, logs_dir, sandbox_mode="bind"):
         baseline_calls.append((workspace_dir, logs_dir))
         return SimpleNamespace(exit_code=1)
 
@@ -137,6 +139,7 @@ def test_benchmark_models_skip_baseline(monkeypatch, tmp_path):
         log_llm_messages=None,
         skip_baseline=False,
         strict_patch=False,
+        sandbox_mode="bind",
     ):
         run_calls.append(skip_baseline)
         return {

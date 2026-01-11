@@ -3,13 +3,14 @@ id: psf__requests-1963
 suite: swe-bench-lite-demo
 labels:
   - swe-bench-lite
+  - network
 
 repo:
   url: https://github.com/psf/requests
   commit: 110048f9837f8441ea536804115e80b69f400277
 
 environment:
-  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  docker_image: python:3.9-slim
   workdir: /workspace
   timeout_sec: 300
 
@@ -25,7 +26,9 @@ setup:
     - pip install --no-build-isolation -e .
 
 run:
-  command: pytest -q test_requests.py::RequestsTestCase::test_DIGESTAUTH_QUOTES_QOP_VALUE test_requests.py::RequestsTestCase::test_DIGESTAUTH_WRONG_HTTP_401_GET test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE test_requests.py::RequestsTestCase::test_DIGEST_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA test_requests.py::RequestsTestCase::test_param_cookiejar_works test_requests.py::TestRedirects::test_requests_are_updated_each_time
+  command: >
+    pytest -q
+    -k "(RequestsTestCase and (test_DIGESTAUTH_QUOTES_QOP_VALUE or test_DIGESTAUTH_WRONG_HTTP_401_GET or test_DIGEST_AUTH_RETURNS_COOKIE or test_DIGEST_HTTP_200_OK_GET or test_POSTBIN_GET_POST_FILES_WITH_DATA or test_param_cookiejar_works)) or (TestRedirects and test_requests_are_updated_each_time)"
 
 agent:
   entrypoint: llm_v0

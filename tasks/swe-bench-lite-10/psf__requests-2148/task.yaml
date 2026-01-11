@@ -5,7 +5,7 @@ repo:
   url: https://github.com/psf/requests
   commit: fe693c492242ae532211e0c173324f09ca8cf227
 environment:
-  docker_image: ghcr.io/agentbench/py-runner:0.1.0
+  docker_image: python:3.9-slim
   workdir: /workspace
   timeout_sec: 180
 setup:
@@ -19,14 +19,12 @@ setup:
   - pip install pytest
   - pip install --no-build-isolation -e .
 run:
-  command: pytest -q test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE
-    test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_ALTERNATIVE test_requests.py::RequestsTestCase::test_HTTP_200_OK_HEAD
-    test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES test_requests.py::RequestsTestCase::test_auth_is_stripped_on_redirect_off_host
-    test_requests.py::RequestsTestCase::test_basicauth_with_netrc test_requests.py::RequestsTestCase::test_cookie_quote_wrapped
-    test_requests.py::RequestsTestCase::test_generic_cookiejar_works test_requests.py::RequestsTestCase::test_iter_content_handles_socket_error
-    test_requests.py::RequestsTestCase::test_unicode_multipart_post
+  command: >
+    pytest -q test_requests.py -k
+    "test_DIGEST_AUTH_RETURNS_COOKIE or test_HTTP_200_OK_GET_ALTERNATIVE or test_HTTP_200_OK_HEAD or test_POSTBIN_GET_POST_FILES or test_auth_is_stripped_on_redirect_off_host or test_basicauth_with_netrc or test_cookie_quote_wrapped or test_generic_cookiejar_works or test_iter_content_handles_socket_error or test_unicode_multipart_post"
 agent:
   entrypoint: llm_v0
   max_steps: 20
 labels:
-- swe-bench-lite
+  - swe-bench-lite
+  - network
